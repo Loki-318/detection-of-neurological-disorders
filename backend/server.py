@@ -19,7 +19,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+#from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 
 # ---------------------------------------------------------------------------

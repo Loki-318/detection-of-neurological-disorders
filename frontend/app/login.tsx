@@ -51,132 +51,140 @@ export default function Login() {
     }
   };
 
+  const scrollContent = (
+    <ScrollView
+      contentContainerStyle={styles.scroll}
+      keyboardShouldPersistTaps="handled"
+    >
+      <View style={styles.brandWrap}>
+        <View style={styles.logo}>
+          <Ionicons name="pulse" size={32} color={theme.primary} />
+        </View>
+        <Text style={styles.brand}>NeuroScan AI</Text>
+        <Text style={styles.tagline}>
+          Early neurological risk screening in your pocket.
+        </Text>
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.tabs}>
+          <TouchableOpacity
+            style={[styles.tab, mode === "login" && styles.tabActive]}
+            onPress={() => setMode("login")}
+            testID="auth-tab-login"
+          >
+            <Text
+              style={[
+                styles.tabText,
+                mode === "login" && styles.tabTextActive,
+              ]}
+            >
+              Log In
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tab, mode === "register" && styles.tabActive]}
+            onPress={() => setMode("register")}
+            testID="auth-tab-register"
+          >
+            <Text
+              style={[
+                styles.tabText,
+                mode === "register" && styles.tabTextActive,
+              ]}
+            >
+              Sign Up
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {mode === "register" && (
+          <View style={styles.field}>
+            <Text style={styles.label}>Full Name</Text>
+            <TextInput
+              testID="register-name-input"
+              style={styles.input}
+              placeholder="Jane Doe"
+              placeholderTextColor={theme.textMuted}
+              value={name}
+              onChangeText={setName}
+              autoCapitalize="words"
+            />
+          </View>
+        )}
+
+        <View style={styles.field}>
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            testID="login-email-input"
+            style={styles.input}
+            placeholder="you@example.com"
+            placeholderTextColor={theme.textMuted}
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+        </View>
+
+        <View style={styles.field}>
+          <Text style={styles.label}>Password</Text>
+          <TextInput
+            testID="login-password-input"
+            style={styles.input}
+            placeholder="••••••••"
+            placeholderTextColor={theme.textMuted}
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+          />
+        </View>
+
+        {err ? (
+          <Text style={styles.err} testID="auth-error-message">
+            {err}
+          </Text>
+        ) : null}
+
+        <TouchableOpacity
+          testID="login-submit-button"
+          style={styles.cta}
+          onPress={submit}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <>
+              <Text style={styles.ctaText}>
+                {mode === "login" ? "Log In" : "Create Account"}
+              </Text>
+              <Ionicons name="arrow-forward" size={20} color="#fff" />
+            </>
+          )}
+        </TouchableOpacity>
+
+        <Text style={styles.disclaimer}>
+          This app provides preliminary screening only and is not a
+          substitute for medical diagnosis.
+        </Text>
+      </View>
+    </ScrollView>
+  );
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={{ flex: 1 }}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-          <ScrollView
-            contentContainerStyle={styles.scroll}
-            keyboardShouldPersistTaps="handled"
-          >
-            <View style={styles.brandWrap}>
-              <View style={styles.logo}>
-                <Ionicons name="pulse" size={32} color={theme.primary} />
-              </View>
-              <Text style={styles.brand}>NeuroScan AI</Text>
-              <Text style={styles.tagline}>
-                Early neurological risk screening in your pocket.
-              </Text>
-            </View>
-
-            <View style={styles.card}>
-              <View style={styles.tabs}>
-                <TouchableOpacity
-                  style={[styles.tab, mode === "login" && styles.tabActive]}
-                  onPress={() => setMode("login")}
-                  testID="auth-tab-login"
-                >
-                  <Text
-                    style={[
-                      styles.tabText,
-                      mode === "login" && styles.tabTextActive,
-                    ]}
-                  >
-                    Log In
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.tab, mode === "register" && styles.tabActive]}
-                  onPress={() => setMode("register")}
-                  testID="auth-tab-register"
-                >
-                  <Text
-                    style={[
-                      styles.tabText,
-                      mode === "register" && styles.tabTextActive,
-                    ]}
-                  >
-                    Sign Up
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {mode === "register" && (
-                <View style={styles.field}>
-                  <Text style={styles.label}>Full Name</Text>
-                  <TextInput
-                    testID="register-name-input"
-                    style={styles.input}
-                    placeholder="Jane Doe"
-                    placeholderTextColor={theme.textMuted}
-                    value={name}
-                    onChangeText={setName}
-                    autoCapitalize="words"
-                  />
-                </View>
-              )}
-
-              <View style={styles.field}>
-                <Text style={styles.label}>Email</Text>
-                <TextInput
-                  testID="login-email-input"
-                  style={styles.input}
-                  placeholder="you@example.com"
-                  placeholderTextColor={theme.textMuted}
-                  value={email}
-                  onChangeText={setEmail}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                />
-              </View>
-
-              <View style={styles.field}>
-                <Text style={styles.label}>Password</Text>
-                <TextInput
-                  testID="login-password-input"
-                  style={styles.input}
-                  placeholder="••••••••"
-                  placeholderTextColor={theme.textMuted}
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry
-                />
-              </View>
-
-              {err ? (
-                <Text style={styles.err} testID="auth-error-message">
-                  {err}
-                </Text>
-              ) : null}
-
-              <TouchableOpacity
-                testID="login-submit-button"
-                style={styles.cta}
-                onPress={submit}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <>
-                    <Text style={styles.ctaText}>
-                      {mode === "login" ? "Log In" : "Create Account"}
-                    </Text>
-                    <Ionicons name="arrow-forward" size={20} color="#fff" />
-                  </>
-                )}
-              </TouchableOpacity>
-
-              <Text style={styles.disclaimer}>
-                This app provides preliminary screening only and is not a
-                substitute for medical diagnosis.
-              </Text>
-            </View>
-          </ScrollView>
-        </TouchableWithoutFeedback>
+        {Platform.OS !== "web" ? (
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+            {scrollContent}
+          </TouchableWithoutFeedback>
+        ) : (
+          scrollContent
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
