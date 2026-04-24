@@ -34,22 +34,30 @@ function riskColor(score: number) {
 export default function Dashboard() {
   const router = useRouter();
   const { user, logout } = useAuth();
+  
   const [scan, setScan] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
-  const [appts, setAppts] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [reminderOn, setReminderOn] = useState(false);
 
+  // Live Feed State
+  const [dbData, setDbData] = useState<any[]>([]);
+  const [dataIndex, setDataIndex] = useState(0);
+
+  // NEW: State to track if cards are clicked/expanded
+  const [expandedGait, setExpandedGait] = useState(false);
+  const [expandedVitals, setExpandedVitals] = useState(false);
+
   const load = useCallback(async () => {
     try {
-      const [latest, scans, a] = await Promise.all([
+      const [latest, scans, sensorData] = await Promise.all([
         api.latestScan(),
         api.listScans(),
-        api.myAppointments(),
+        api.getSensorData(), // Fetching real data from MongoDB
       ]);
       setScan(latest && latest.id ? latest : null);
       setHistory(scans || []);
-      setAppts(a || []);
+      setDbData(sensorData || []);
     } catch {
       // ignore
     }
@@ -61,6 +69,16 @@ export default function Dashboard() {
     }, [load])
   );
 
+  // Cycle the Live Data every 2 seconds
+  useEffect(() => {
+    if (dbData.length === 0) return;
+    const interval = setInterval(() => {
+      setDataIndex((prevIndex) => (prevIndex + 1) % dbData.length);
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [dbData]);
+
+  // Reminder toggle logic
   useEffect(() => {
     (async () => {
       const r = await getReminderState();
@@ -96,9 +114,28 @@ export default function Dashboard() {
     setRefreshing(false);
   };
 
+  // Safe extraction for the hero circle
   const total = scan?.total_score ?? 0;
   const color = scan ? riskColor(total) : theme.primary;
   const label = scan?.risk_label ?? "No Scan Yet";
+
+  // Safe extraction for live cycling data
+  const currentData = dbData.length > 0 ? dbData[dataIndex] : null;
+  const heartRate = currentData?.vitals?.heart_rate || 0;
+  const spo2 = currentData?.vitals?.spo2 || 0;
+  const ecg = currentData?.ecg || 0;
+  const gsr = currentData?.gsr || 0;
+  const accel = currentData?.accel;
+
+  // Anomaly Detection Logic
+  const isHeartRateHigh = heartRate > 100;
+  const isSpo2Low = spo2 > 0 && spo2 < 95;
+  const hasIssue = isHeartRateHigh || isSpo2Low;
+
+  // NEW: Calculate the rolling window of the last 5 readings for the expanded view
+  const liveStreamWindow = dbData.length > 0
+    ? [0, 1, 2, 3, 4].map(i => dbData[(dataIndex - i + dbData.length) % dbData.length])
+    : [];
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -113,7 +150,7 @@ export default function Dashboard() {
           <View>
             <Text style={styles.greeting}>Hello,</Text>
             <Text style={styles.name} testID="dashboard-user-name">
-              {user?.name ?? "Friend"}
+              {user?.name ?? "Patient"}
             </Text>
           </View>
           <TouchableOpacity
@@ -150,29 +187,122 @@ export default function Dashboard() {
           </Text>
         </View>
 
-        {/* Metric cards */}
+        {/* LIVE FEED STATUS BANNER */}
+        {dbData.length > 0 && (
+          <View style={[styles.alert, { backgroundColor: hasIssue ? theme.high + "14" : theme.low + "14", borderColor: hasIssue ? theme.high + "33" : theme.low + "33" }]}>
+            <Ionicons name={hasIssue ? "warning" : "pulse"} size={24} color={hasIssue ? theme.high : theme.low} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.alertText, { fontWeight: '700', marginBottom: 2, color: hasIssue ? theme.high : theme.low }]}>
+                {hasIssue ? "Anomaly Detected" : "Vitals Normal"}
+              </Text>
+              <Text style={styles.alertText}>
+                {hasIssue ? "Irregularities found in live sensor stream." : "Monitoring MongoDB feed actively."}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* GROUPED LIVE SENSOR FEED */}
+        <Text style={[styles.cardLabel, { marginTop: 8 }]}>Live Sensor Feed (Tap to expand)</Text>
+        
         <View style={styles.metricsRow}>
-          <MetricCard
-            testID="metric-card-gait"
-            icon="walk-outline"
-            label="Gait"
-            value={scan?.gait_score ?? "—"}
-            tint="#3B82F6"
-          />
-          <MetricCard
-            testID="metric-card-face"
-            icon="happy-outline"
-            label="Face"
-            value={scan?.face_score ?? "—"}
-            tint="#8B5CF6"
-          />
-          <MetricCard
-            testID="metric-card-behavior"
-            icon="pulse-outline"
-            label="Behavior"
-            value={scan?.behavior_score ?? "—"}
-            tint={theme.primary}
-          />
+          
+          {/* Group 1: Motor & Gait (CLICKABLE) */}
+          <TouchableOpacity 
+            activeOpacity={0.8}
+            onPress={() => setExpandedGait(!expandedGait)}
+            style={[styles.metric, shadow, { flex: 1 }]}
+          >
+            <View style={styles.cardHeaderRow}>
+              <View>
+                <View style={[styles.metricIcon, { backgroundColor: "#3B82F61A" }]}>
+                  <Ionicons name="walk" size={18} color="#3B82F6" />
+                </View>
+                <Text style={styles.metricLabel}>Motor & Gait</Text>
+              </View>
+              <Ionicons name={expandedGait ? "chevron-up" : "chevron-down"} size={20} color={theme.textMuted} />
+            </View>
+            
+            {accel ? (
+              <View style={{ marginTop: 12 }}>
+                <Text style={styles.subText}><Text style={styles.boldText}>Accel X: </Text>{accel.x}</Text>
+                <Text style={styles.subText}><Text style={styles.boldText}>Accel Y: </Text>{accel.y}</Text>
+                <Text style={styles.subText}><Text style={styles.boldText}>Accel Z: </Text>{accel.z}</Text>
+              </View>
+            ) : (
+              <Text style={[styles.metricValue, { marginTop: 8 }]}>—</Text>
+            )}
+
+            {/* EXPANDED LIVE STREAM */}
+            {expandedGait && dbData.length > 0 && (
+              <View style={styles.expandedStream}>
+                <Text style={styles.streamTitle}>Live Stream</Text>
+                {liveStreamWindow.map((d, i) => (
+                  <View key={i} style={[styles.streamRow, { opacity: 1 - (i * 0.15) }]}>
+                     <Text style={styles.streamText}>
+                       X:{d?.accel?.x || 0} Y:{d?.accel?.y || 0} Z:{d?.accel?.z || 0}
+                     </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {/* Group 2: Autonomic Vitals (CLICKABLE) */}
+          <TouchableOpacity 
+            activeOpacity={0.8}
+            onPress={() => setExpandedVitals(!expandedVitals)}
+            style={[
+              styles.metric, 
+              shadow, 
+              { flex: 1 },
+              hasIssue && { borderColor: theme.high + "55", backgroundColor: theme.high + "0A" }
+            ]}
+          >
+            <View style={styles.cardHeaderRow}>
+              <View>
+                <View style={[styles.metricIcon, { backgroundColor: hasIssue ? theme.high + "1A" : "#10B9811A" }]}>
+                  <Ionicons name="heart-half" size={18} color={hasIssue ? theme.high : "#10B981"} />
+                </View>
+                <Text style={styles.metricLabel}>Vitals & ANS</Text>
+              </View>
+              <Ionicons name={expandedVitals ? "chevron-up" : "chevron-down"} size={20} color={theme.textMuted} />
+            </View>
+            
+            {heartRate > 0 ? (
+              <View style={{ marginTop: 12 }}>
+                <Text style={[styles.subText, isHeartRateHigh && { color: theme.high, fontWeight: "700" }]}>
+                  <Text style={styles.boldText}>HR: </Text>{heartRate} bpm
+                </Text>
+                <Text style={[styles.subText, isSpo2Low && { color: theme.high, fontWeight: "700" }]}>
+                  <Text style={styles.boldText}>SpO2: </Text>{spo2}%
+                </Text>
+                <Text style={styles.subText}>
+                  <Text style={styles.boldText}>GSR/ECG: </Text>{gsr}/{ecg}
+                </Text>
+              </View>
+            ) : (
+              <Text style={[styles.metricValue, { marginTop: 8 }]}>—</Text>
+            )}
+
+            {/* EXPANDED LIVE STREAM */}
+            {expandedVitals && dbData.length > 0 && (
+              <View style={styles.expandedStream}>
+                <Text style={styles.streamTitle}>Live Stream</Text>
+                {liveStreamWindow.map((d, i) => (
+                  <View key={i} style={[styles.streamRow, { opacity: 1 - (i * 0.15) }]}>
+                     <Text style={styles.streamText}>
+                       HR:{d?.vitals?.heart_rate || 0} SpO2:{d?.vitals?.spo2 || 0}%
+                     </Text>
+                     <Text style={[styles.streamText, { fontSize: 10, marginTop: 2 }]}>
+                       GSR:{d?.gsr || 0} ECG:{d?.ecg || 0}
+                     </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </TouchableOpacity>
+
         </View>
 
         {/* Primary CTA */}
@@ -188,18 +318,16 @@ export default function Dashboard() {
         {/* Secondary actions */}
         <View style={styles.actionRow}>
           <ActionCard
-            testID="action-chat"
             icon="chatbubbles"
-            title="Chat with AI Doctor"
-            subtitle="Ask questions about your results"
+            title="Chat with AI"
+            subtitle="Analyze your results"
             onPress={() => router.push("/(tabs)/chat")}
           />
           <ActionCard
-            testID="action-book"
-            icon="calendar"
-            title="Book Appointment"
-            subtitle={`${appts.length} upcoming`}
-            onPress={() => router.push("/(tabs)/appointments")}
+            icon="time-outline"
+            title="Scan History"
+            subtitle="View past records"
+            onPress={() => router.push("/(tabs)/history")}
           />
         </View>
 
@@ -207,7 +335,7 @@ export default function Dashboard() {
           <View style={styles.alert} testID="dashboard-alert">
             <Ionicons name="warning" size={20} color={theme.high} />
             <Text style={styles.alertText}>
-              Your score indicates elevated risk. Consider booking an appointment with a neurologist.
+              Your score indicates elevated risk. Consider reviewing with an AI or real doctor.
             </Text>
           </View>
         )}
@@ -237,6 +365,7 @@ export default function Dashboard() {
           </View>
         )}
 
+        {/* Reminder Toggle */}
         <View style={[styles.reminderCard, shadow]} testID="reminder-card">
           <View style={styles.reminderLeft}>
             <View style={styles.reminderIcon}>
@@ -262,30 +391,7 @@ export default function Dashboard() {
   );
 }
 
-function MetricCard({
-  icon,
-  label,
-  value,
-  tint,
-  testID,
-}: {
-  icon: any;
-  label: string;
-  value: any;
-  tint: string;
-  testID?: string;
-}) {
-  return (
-    <View style={[styles.metric, shadow]} testID={testID}>
-      <View style={[styles.metricIcon, { backgroundColor: tint + "1A" }]}>
-        <Ionicons name={icon} size={18} color={tint} />
-      </View>
-      <Text style={styles.metricValue}>{value}</Text>
-      <Text style={styles.metricLabel}>{label}</Text>
-    </View>
-  );
-}
-
+// Sub-components
 function ActionCard({
   icon,
   title,
@@ -314,6 +420,7 @@ function ActionCard({
   );
 }
 
+// Styles
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.bg },
   scroll: { padding: 20, paddingBottom: 32, gap: 18 },
@@ -369,7 +476,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 18,
   },
-  metricsRow: { flexDirection: "row", gap: 10 },
+  metricsRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
   metric: {
     flex: 1,
     backgroundColor: theme.surface,
@@ -378,6 +485,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
   },
+  cardHeaderRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   metricIcon: {
     width: 32,
     height: 32,
@@ -395,6 +503,15 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginTop: 2,
   },
+  subText: { fontSize: 14, color: theme.textMain, marginBottom: 6 },
+  boldText: { fontWeight: "700", color: theme.textMuted },
+  
+  // NEW STYLES FOR THE EXPANDED STREAM
+  expandedStream: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderColor: theme.border },
+  streamTitle: { fontSize: 10, fontWeight: "800", color: theme.primary, textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 },
+  streamRow: { marginBottom: 8 },
+  streamText: { fontSize: 11, color: theme.textMuted, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+
   primaryCta: {
     backgroundColor: theme.primary,
     borderRadius: 999,

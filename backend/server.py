@@ -18,6 +18,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
+import certifi
 
 #from emergentintegrations.llm.chat import LlmChat, UserMessage
 
@@ -26,9 +27,11 @@ from pydantic import BaseModel, EmailStr, Field
 # Config / DB
 # ---------------------------------------------------------------------------
 mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
+#client = AsyncIOMotorClient(mongo_url)
+#db = client[os.environ["DB_NAME"]]
+# 2. ADD THE CERTIFICATE RIGHT HERE:
+client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where()) 
 db = client[os.environ["DB_NAME"]]
-
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGO = "HS256"
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
@@ -166,6 +169,24 @@ async def me(user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # Scans (dummy risk analysis)
 # ---------------------------------------------------------------------------
+@api_router.get("/sensor-data")
+async def get_raw_sensor_data(user: dict = Depends(get_current_user)):
+    try:
+        # 1. We specifically tell Python to look in the hardware database!
+        hardware_db = client["WearableProject"] 
+        
+        # 2. We pull from the SensorData collection
+        cursor = hardware_db.SensorData.find({}, {"_id": 0}).sort("timestamp", 1).limit(100)
+        data = await cursor.to_list(length=50)
+        return data
+    except Exception as e:
+        logger.error(f"Error fetching sensor data: {e}")
+        return []
+
+# ---------------------------------------------------------------------------
+# Scans (dummy risk analysis)
+# ---------------------------------------------------------------------------
+
 def _risk_label(score: int) -> str:
     if score >= 75:
         return "Low Risk"

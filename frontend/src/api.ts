@@ -51,7 +51,17 @@ export const api = {
   login: (email: string, password: string) =>
     request<{ token: string; user: any }>("/auth/login", "POST", { email, password }, false),
   me: () => request<any>("/auth/me"),
-  createScan: (face_detected: boolean) => request<any>("/scans", "POST", { face_detected }),
+
+  createScan: (data: {
+    heartRate: number;
+    spo2: number;
+    gsr: number;
+    ecg: number;
+    accel?: any;
+    face_detected: boolean;
+}) =>
+  request<any>("/scans", "POST", data),
+
   latestScan: () => request<any>("/scans/latest"),
   listScans: () => request<any[]>("/scans"),
   sendChat: (message: string) =>
@@ -61,4 +71,7 @@ export const api = {
   book: (slot_id: string, doctor: string, date: string, time: string) =>
     request<any>("/appointments", "POST", { slot_id, doctor, date, time }),
   myAppointments: () => request<any[]>("/appointments"),
+  
+  // The missing bridge to your MongoDB data!
+  getSensorData: () => request<any[]>("/sensor-data"),
 };
