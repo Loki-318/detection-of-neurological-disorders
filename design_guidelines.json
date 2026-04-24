@@ -1,0 +1,130 @@
+{
+  "theme": "light",
+  "archetype": "1_organic_earthy",
+  "design_philosophy": "Apple Health inspired medical UI. Calm, clean, accessible. Heavy use of negative space, large typography for readability, and soft organic colors to reduce clinical anxiety. Designed specifically for React Native (.js).",
+  "colors": {
+    "background": "#FAFAFA",
+    "surface": "#FFFFFF",
+    "primary": "#059669",
+    "primary_light": "#D1FAE5",
+    "text_main": "#171717",
+    "text_muted": "#737373",
+    "border": "#F5F5F4",
+    "status": {
+      "low_risk": "#10B981",
+      "moderate_risk": "#F59E0B",
+      "high_risk": "#EA580C"
+    }
+  },
+  "typography": {
+    "heading_font": "Manrope",
+    "body_font": "System",
+    "rules": {
+      "h1": "text-4xl font-black tracking-tight text-zinc-900",
+      "h2": "text-2xl font-bold tracking-tight text-zinc-800",
+      "h3": "text-lg font-semibold text-zinc-800",
+      "body": "text-base font-normal text-zinc-600",
+      "label": "text-sm font-medium uppercase tracking-[0.2em] text-zinc-500"
+    }
+  },
+  "spacing_and_layout": {
+    "screen_padding": "p-6",
+    "card_padding": "p-5",
+    "gap_standard": "gap-4",
+    "gap_large": "gap-6",
+    "border_radius": {
+      "card": "rounded-3xl",
+      "button": "rounded-full",
+      "pill": "rounded-full"
+    },
+    "shadows": {
+      "subtle": "shadow-[0_4px_20px_rgba(0,0,0,0.04)]",
+      "floating": "shadow-[0_8px_30px_rgba(0,0,0,0.08)]"
+    }
+  },
+  "components": {
+    "card": {
+      "style": "bg-white rounded-3xl shadow-sm border border-zinc-100 p-5",
+      "rules": "Never use pure white on pure white without the subtle shadow and border."
+    },
+    "button_primary": {
+      "style": "bg-emerald-600 rounded-full py-4 px-8 items-center justify-center flex-row",
+      "text_style": "text-white font-semibold text-lg",
+      "rules": "Must be large and tappable (min 48px height)."
+    },
+    "metric_card": {
+      "style": "bg-white rounded-2xl p-4 flex-1 shadow-sm border border-zinc-100",
+      "layout": "Use in 2-column grid. Icon on top left, value in center, label at bottom."
+    },
+    "progress_circle": {
+      "style": "Stroke width 12px, rounded line caps",
+      "animation": "Reanimated strokeDashoffset from circumference to target value over 1500ms using easeOut."
+    },
+    "chat_bubble": {
+      "user": "bg-emerald-600 rounded-2xl rounded-tr-sm p-4",
+      "user_text": "text-white text-base",
+      "ai": "bg-zinc-100 rounded-2xl rounded-tl-sm p-4",
+      "ai_text": "text-zinc-800 text-base"
+    }
+  },
+  "motion_and_animations": {
+    "screen_transition": "Fade and slight slide up (React Native Stack transition).",
+    "camera_pulse": "Concentric circles scaling from 1 to 1.5 with opacity fading from 0.5 to 0. Use React Native Reanimated loop.",
+    "score_reveal": "Number interpolates from 0 to actual score. Progress circle draws smoothly.",
+    "accessibility": "Respect prefers-reduced-motion."
+  },
+  "screens": [
+    {
+      "name": "LoginRegister",
+      "description": "Clean, welcoming entry. Large typography. Simple email/password fields with rounded-2xl inputs.",
+      "test_ids": ["login-email-input", "login-password-input", "login-submit-button"]
+    },
+    {
+      "name": "Dashboard",
+      "description": "Personalized health summary. Circular progress ring is the hero. Bento-style metric cards for Gait, Face, Behavior below.",
+      "test_ids": ["dashboard-risk-score", "metric-card-gait", "metric-card-face", "metric-card-behavior"]
+    },
+    {
+      "name": "CameraScan",
+      "description": "Immersive scanning experience. Large camera viewport with rounded corners. Animated scanning overlay.",
+      "test_ids": ["camera-view", "scan-start-button", "face-status-indicator"]
+    },
+    {
+      "name": "RiskAnalysis",
+      "description": "Detailed breakdown. Animated horizontal progress bars for each risk category. Color-coded (Sage/Yellow/Terracotta).",
+      "test_ids": ["risk-result-total", "progress-bar-parkinsons", "progress-bar-alzheimers"]
+    },
+    {
+      "name": "DoctorChat",
+      "description": "Conversational UI. Doctor avatar at top. Scrollable message list. Inline time slots for booking.",
+      "test_ids": ["chat-message-list", "chat-input", "chat-send-button", "appointment-slot-pill"]
+    }
+  ],
+  "media": {
+    "image_urls": [
+      {
+        "category": "ai_doctor_avatar",
+        "url": "https://images.unsplash.com/photo-1615177393114-bd2917a4f74a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzV8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBkb2N0b3IlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzY1NzM5OTB8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Professional male doctor with glasses, used for the AI Agent avatar."
+      },
+      {
+        "category": "patient_avatar_placeholder",
+        "url": "https://images.unsplash.com/photo-1755189118414-14c8dacdb082?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzV8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBkb2N0b3IlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzY1NzM5OTB8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Default avatar for logged-in user profile if none uploaded."
+      }
+    ]
+  },
+  "testing_rules": {
+    "requirement": "All interactive and key informational elements MUST include a data-testid attribute in JS files.",
+    "convention": "kebab-case, role-based. e.g., data-testid='login-submit-button'"
+  },
+  "instructions_to_main_agent": [
+    "Use .js extension for React Native Expo files.",
+    "Apply styling via Tailwind classes if NativeWind is configured, otherwise translate the classes to React Native StyleSheet objects.",
+    "Ensure all Text elements are wrapped in <Text> components.",
+    "Utilize standard React Native Views for layout (flexbox is default column).",
+    "For the circular progress and pulse animations, use 'react-native-reanimated'.",
+    "Implement bottom tab navigation using @react-navigation/bottom-tabs.",
+    "Icons must be from @expo/vector-icons."
+  ]
+}
