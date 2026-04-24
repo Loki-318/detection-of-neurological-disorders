@@ -88,3 +88,27 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# ── Data ────────────────────────────────────────────
+data/pads_patients/
+data/pads_preprocessed/movement/
+data/pads_preprocessed/questionnaire/
+data/ALAMEDA_PD_tremor_dataset.csv
+models and data.zip
+
+# ── Models ──────────────────────────────────────────
+models/
+
+# ── Notebook clutter ────────────────────────────────
+**/.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Python ──────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# ── OS ──────────────────────────────────────────────
+Thumbs.db
+.DS_Store
