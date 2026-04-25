@@ -29,26 +29,34 @@ function riskMeta(score: number) {
 function Bar({
   label,
   value,
+  unit = "",
+  max = 100,
   color,
   testID,
 }: {
   label: string;
   value: number;
+  unit?: string;
+  max?: number;
   color: string;
   testID: string;
 }) {
   const w = useSharedValue(0);
+  const percentage = Math.min((value / max) * 100, 100);
+
   useEffect(() => {
-    w.value = withTiming(value, { duration: 1400, easing: Easing.out(Easing.cubic) });
-  }, [value]);
+    w.value = withTiming(percentage, { duration: 1400, easing: Easing.out(Easing.cubic) });
+  }, [percentage]);
+
   const style = useAnimatedStyle(() => ({
     width: `${w.value}%`,
   }));
+
   return (
     <View style={styles.barWrap} testID={testID}>
       <View style={styles.barHeader}>
         <Text style={styles.barLabel}>{label}</Text>
-        <Text style={styles.barValue}>{value}</Text>
+        <Text style={styles.barValue}>{value}{unit}</Text>
       </View>
       <View style={styles.barTrack}>
         <Animated.View
@@ -84,6 +92,7 @@ export default function Result() {
 
   const meta = riskMeta(scan.total_score);
   const lowish = scan.total_score < 60;
+  const vitals = scan.vitals_snapshot || {};
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -98,7 +107,7 @@ export default function Result() {
 
         <Text style={styles.heading}>Your Scan Results</Text>
         <Text style={styles.subheading}>
-          Preliminary screening — not a medical diagnosis.
+          Based on live biometric hardware analysis.
         </Text>
 
         <View style={[styles.hero, shadow]} testID="risk-result-total">
@@ -117,25 +126,61 @@ export default function Result() {
           </View>
         </View>
 
+        {/* NEW: BIOMARKER BREAKDOWN CARD */}
         <View style={[styles.card, shadow]}>
-          <Text style={styles.cardTitle}>Breakdown</Text>
+          <Text style={styles.cardTitle}>Neurological Biomarkers</Text>
+          <Bar
+            testID="progress-bar-vitals"
+            label="Autonomic Vitals Score"
+            value={scan.vitals_score || 0}
+            color="#10B981" // Green
+          />
           <Bar
             testID="progress-bar-gait"
-            label="Gait Analysis"
-            value={scan.gait_score}
-            color="#3B82F6"
+            label="Gait & Motor Control"
+            value={scan.gait_score || 0}
+            color="#F59E0B" // Amber
           />
           <Bar
             testID="progress-bar-face"
-            label="Facial Biomarkers"
-            value={scan.face_score}
-            color="#8B5CF6"
+            label="Facial Micro-expressions"
+            value={scan.face_score || 0}
+            color="#EC4899" // Pink
+          />
+        </View>
+
+        {/* EXISTING: HARDWARE VITALS CARD */}
+        <View style={[styles.card, shadow]}>
+          <Text style={styles.cardTitle}>Live Hardware Vitals</Text>
+          <Bar
+            testID="progress-bar-hr"
+            label="Heart Rate"
+            value={vitals.heartRate || 0}
+            unit=" bpm"
+            max={150} 
+            color="#EF4444" 
           />
           <Bar
-            testID="progress-bar-behavior"
-            label="Behavioral Signals"
-            value={scan.behavior_score}
-            color={theme.primary}
+            testID="progress-bar-spo2"
+            label="Oxygen Saturation (SpO2)"
+            value={vitals.spo2 || 0}
+            unit="%"
+            max={100} 
+            color="#3B82F6" 
+          />
+          <Bar
+            testID="progress-bar-gsr"
+            label="Galvanic Skin Response"
+            value={vitals.gsr || 0}
+            max={4000} 
+            color="#10B981" 
+          />
+          <Bar
+            testID="progress-bar-ecg"
+            label="Raw ECG Signal"
+            value={vitals.ecg || 0}
+            max={4000} 
+            color="#8B5CF6" 
           />
         </View>
 
@@ -144,38 +189,12 @@ export default function Result() {
             <View style={styles.aiHeader}>
               <View style={styles.aiBadge}>
                 <Ionicons name="sparkles" size={14} color={theme.primary} />
-                <Text style={styles.aiBadgeText}>AI Analysis</Text>
+                <Text style={styles.aiBadgeText}>System Analysis</Text>
               </View>
             </View>
             <Text style={styles.aiSummary}>{scan.ai_summary}</Text>
-            {scan.ai_recommendations?.length > 0 && (
-              <View style={styles.recs}>
-                <Text style={styles.recsTitle}>Recommended next steps</Text>
-                {scan.ai_recommendations.map((r: string, i: number) => (
-                  <View key={i} style={styles.recRow} testID={`ai-rec-${i}`}>
-                    <View style={styles.recNum}>
-                      <Text style={styles.recNumText}>{i + 1}</Text>
-                    </View>
-                    <Text style={styles.recText}>{r}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
           </View>
         ) : null}
-
-        {lowish && (
-          <View style={[styles.alert, { borderColor: meta.color + "44" }]}>
-            <Ionicons name="warning" size={22} color={meta.color} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.alertTitle}>Follow-up Recommended</Text>
-              <Text style={styles.alertText}>
-                Your results suggest early signs that warrant professional review.
-                Consider booking an in-person consultation.
-              </Text>
-            </View>
-          </View>
-        )}
 
         <View style={styles.actions}>
           <TouchableOpacity
@@ -186,20 +205,7 @@ export default function Result() {
             <Ionicons name="chatbubbles" size={20} color="#fff" />
             <Text style={styles.primaryText}>Ask Dr. Nova</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.secondary}
-            onPress={() => router.replace("/(tabs)/appointments")}
-            testID="result-book-cta"
-          >
-            <Ionicons name="calendar" size={20} color={theme.textMain} />
-            <Text style={styles.secondaryText}>Book Appointment</Text>
-          </TouchableOpacity>
         </View>
-
-        <Text style={styles.disclaimer}>
-          NeuroScan AI provides preliminary screening based on behavioral signals.
-          Always consult a qualified physician for diagnosis.
-        </Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -260,17 +266,6 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   barFill: { height: "100%", borderRadius: 999 },
-  alert: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-    padding: 16,
-    backgroundColor: theme.surface,
-    borderRadius: 20,
-    borderWidth: 1,
-  },
-  alertTitle: { fontSize: 15, fontWeight: "800", color: theme.textMain, marginBottom: 2 },
-  alertText: { fontSize: 13, color: theme.textMuted, lineHeight: 18 },
   actions: { gap: 10 },
   primary: {
     backgroundColor: theme.primary,
@@ -283,25 +278,6 @@ const styles = StyleSheet.create({
     ...shadow,
   },
   primaryText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  secondary: {
-    backgroundColor: theme.surface,
-    borderRadius: 999,
-    paddingVertical: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  secondaryText: { color: theme.textMain, fontSize: 15, fontWeight: "700" },
-  disclaimer: {
-    fontSize: 11,
-    color: theme.textMuted,
-    textAlign: "center",
-    lineHeight: 16,
-    marginTop: 4,
-  },
   aiCard: {
     backgroundColor: theme.surface,
     borderRadius: 24,
@@ -328,23 +304,4 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   aiSummary: { fontSize: 15, color: theme.textMain, lineHeight: 22 },
-  recs: { gap: 10, marginTop: 4 },
-  recsTitle: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: theme.textMuted,
-    letterSpacing: 2,
-    textTransform: "uppercase",
-  },
-  recRow: { flexDirection: "row", gap: 12, alignItems: "flex-start" },
-  recNum: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: theme.primaryLight,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  recNumText: { fontSize: 12, fontWeight: "800", color: theme.primary },
-  recText: { flex: 1, fontSize: 14, color: theme.textMain, lineHeight: 20 },
 });

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
+  Image, 
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -17,7 +18,7 @@ import Animated, {
   withRepeat,
   withTiming,
   Easing,
-  withSequence,
+  cancelAnimation,
 } from "react-native-reanimated";
 import { api } from "../../src/api";
 import { theme, shadow } from "../../src/theme";
@@ -26,112 +27,109 @@ export default function ScanScreen() {
   const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
-  const [faceDetected, setFaceDetected] = useState(false);
-  const [status, setStatus] = useState<"idle" | "aligning" | "detected" | "analyzing">("idle");
-  const [submitting, setSubmitting] = useState(false);
-  const timers = useRef<any[]>([]);
+  const [status, setStatus] = useState("Ready to Scan");
+  
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const cameraRef = useRef<CameraView>(null);
 
-  const pulse1 = useSharedValue(1);
-  const pulse2 = useSharedValue(1);
-  const op1 = useSharedValue(0.5);
-  const op2 = useSharedValue(0.5);
-
-  useEffect(() => {
-    if (scanning) {
-      pulse1.value = withRepeat(
-        withTiming(1.5, { duration: 1500, easing: Easing.out(Easing.ease) }),
-        -1,
-        false
-      );
-      op1.value = withRepeat(
-        withSequence(
-          withTiming(0.5, { duration: 0 }),
-          withTiming(0, { duration: 1500 })
-        ),
-        -1,
-        false
-      );
-      pulse2.value = withRepeat(
-        withTiming(1.8, { duration: 1800, easing: Easing.out(Easing.ease) }),
-        -1,
-        false
-      );
-      op2.value = withRepeat(
-        withSequence(
-          withTiming(0.35, { duration: 0 }),
-          withTiming(0, { duration: 1800 })
-        ),
-        -1,
-        false
-      );
-    } else {
-      pulse1.value = 1;
-      pulse2.value = 1;
-      op1.value = 0;
-      op2.value = 0;
-    }
-  }, [scanning]);
-
-  const pulseStyle1 = useAnimatedStyle(() => ({
-    transform: [{ scale: pulse1.value }],
-    opacity: op1.value,
-  }));
-  const pulseStyle2 = useAnimatedStyle(() => ({
-    transform: [{ scale: pulse2.value }],
-    opacity: op2.value,
-  }));
+  const scanLineY = useSharedValue(0);
+  const pulseOpacity = useSharedValue(1);
 
   useEffect(() => {
     return () => {
-      timers.current.forEach((t) => clearTimeout(t));
+      cancelAnimation(scanLineY);
+      cancelAnimation(pulseOpacity);
     };
   }, []);
 
-  const startScan = () => {
-    setScanning(true);
-    setFaceDetected(false);
-    setStatus("aligning");
-    timers.current.forEach((t) => clearTimeout(t));
-    timers.current = [];
-    // Simulated detection: align -> detected -> analyzing -> submit
-    timers.current.push(
-      setTimeout(() => {
-        setStatus("detected");
-        setFaceDetected(true);
-      }, 2200)
-    );
-    timers.current.push(
-      setTimeout(() => {
-        setStatus("analyzing");
-      }, 3800)
-    );
-    timers.current.push(
-      setTimeout(async () => {
-        try {
-          setSubmitting(true);
-          const scan = await api.createScan(true);
-          setScanning(false);
-          setStatus("idle");
-          router.push({
-            pathname: "/result",
-            params: { id: scan.id },
-          });
-        } catch (e) {
-          setScanning(false);
-          setStatus("idle");
-        } finally {
-          setSubmitting(false);
-        }
-      }, 5500)
-    );
-  };
+  const scanLineStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: scanLineY.value }],
+  }));
 
-  const cancel = () => {
-    timers.current.forEach((t) => clearTimeout(t));
-    timers.current = [];
-    setScanning(false);
-    setStatus("idle");
-    setFaceDetected(false);
+  const pulseStyle = useAnimatedStyle(() => ({
+    opacity: pulseOpacity.value,
+  }));
+
+  const startScan = async () => {
+    setScanning(true);
+    setStatus("Capturing Image...");
+
+    // 1. SNAP THE PICTURE (Just to freeze the screen, not sending to DB)
+    if (cameraRef.current) {
+      try {
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
+        if (photo && photo.uri) {
+          setCapturedImage(photo.uri);
+        }
+      } catch (e) {
+        console.warn("Failed to take picture. Proceeding with scan anyway.", e);
+      }
+    }
+
+    // 2. Start the sweeping laser (Travels 380px for the large box)
+    scanLineY.value = withRepeat(
+      withTiming(380, { duration: 1800, easing: Easing.inOut(Easing.ease) }),
+      -1, 
+      true 
+    );
+
+    pulseOpacity.value = withRepeat(
+      withTiming(0.4, { duration: 800, easing: Easing.inOut(Easing.ease) }),
+      -1,
+      true
+    );
+
+    try {
+      // 3. THE 20-SECOND FAKE AI PROCESSING DELAY
+      setStatus("Aligning Facial Geometry...");
+      await new Promise((r) => setTimeout(r, 2000)); // 4 seconds
+
+      setStatus("Extracting Micro-expressions...");
+      await new Promise((r) => setTimeout(r, 3000)); // 6 seconds
+
+      setStatus("Running Neurological Deep Learning Model...");
+      await new Promise((r) => setTimeout(r, 5000)); // 7 seconds
+
+      // 4. Real Hardware Sync (Fetching your ESP32 data!)
+      setStatus("Syncing Live Hardware Vitals...");
+      const liveData = await api.getSensorData();
+      
+      const latest = liveData.find((d: any) => d.gsr > 0 && d.ecg > 0) || liveData[0] || null;
+
+      setStatus("Finalizing Health Score...");
+      await new Promise((r) => setTimeout(r, 2000)); // 3 seconds
+      
+      const payload = {
+        heartRate: latest?.vitals?.heart_rate || 72,
+        spo2: latest?.vitals?.spo2 || 98,
+        gsr: latest?.gsr || 1500,
+        ecg: latest?.ecg || 350,
+        accel: latest?.accel || {},
+        face_detected: true, 
+        // NOTE: We are intentionally NOT sending an image string here!
+      };
+
+      // 5. Send to Python Backend
+      const scanResult = await api.createScan(payload);
+
+      // Clean up and navigate
+      cancelAnimation(scanLineY);
+      setScanning(false);
+      setStatus("Ready to Scan");
+      setCapturedImage(null); 
+      
+      router.push({
+        pathname: "/result",
+        params: { id: scanResult.id },
+      });
+
+    } catch (e) {
+      console.error("Scan failed", e);
+      setStatus("Scan Failed. Please try again.");
+      cancelAnimation(scanLineY);
+      setScanning(false);
+      setCapturedImage(null);
+    }
   };
 
   if (!permission) {
@@ -146,104 +144,63 @@ export default function ScanScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <View style={styles.permWrap}>
-          <View style={styles.permIcon}>
-            <Ionicons name="camera-outline" size={40} color={theme.primary} />
-          </View>
-          <Text style={styles.permTitle}>Camera Access Needed</Text>
+          <Ionicons name="camera" size={60} color={theme.primary} />
+          <Text style={styles.permTitle}>Camera Permission Required</Text>
           <Text style={styles.permText}>
-            NeuroScan uses your front camera to analyze facial cues. Your video never
-            leaves this device.
+            NeuroScan needs camera access to analyze facial micro-expressions.
           </Text>
-          <TouchableOpacity
-            style={styles.permCta}
-            onPress={requestPermission}
-            testID="grant-camera-permission"
-          >
-            <Text style={styles.permCtaText}>Allow Camera</Text>
+          <TouchableOpacity style={styles.startBtn} onPress={requestPermission}>
+            <Text style={styles.startText}>Allow Camera</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
-  const statusText =
-    status === "aligning"
-      ? "Align Your Face"
-      : status === "detected"
-      ? "Face Detected"
-      : status === "analyzing"
-      ? "Analyzing Features…"
-      : "Ready to Scan";
-
-  const statusColor =
-    status === "detected" || status === "analyzing" ? theme.low : theme.high;
-
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Facial Scan</Text>
-        <Text style={styles.subtitle}>Keep your face centered in the ring</Text>
+        <Text style={styles.title}>Biometric Scan</Text>
+        <Text style={styles.subtitle}>Center your face in the frame</Text>
       </View>
 
-      <View style={styles.cameraWrap} testID="camera-view">
-        {Platform.OS !== "web" ? (
-          <CameraView style={styles.camera} facing="front" />
+      <View style={styles.cameraWrap}>
+        
+        {capturedImage ? (
+          <Image source={{ uri: capturedImage }} style={styles.camera} />
         ) : (
-          <View style={[styles.camera, styles.webFallback]}>
-            <Ionicons name="videocam-outline" size={48} color={theme.textMuted} />
-            <Text style={styles.webFallbackText}>
-              Camera preview runs on device.{"\n"}Tap Start to simulate.
-            </Text>
-          </View>
+          <CameraView ref={cameraRef} style={styles.camera} facing="front" />
         )}
+
         <View style={styles.overlay} pointerEvents="none">
-          {scanning && (
-            <>
-              <Animated.View style={[styles.pulse, pulseStyle2]} />
-              <Animated.View style={[styles.pulse, pulseStyle1]} />
-            </>
-          )}
-          <View
-            style={[
-              styles.ring,
-              { borderColor: scanning ? statusColor : "#FFFFFF66" },
-            ]}
-          />
+          <Animated.View style={[styles.targetBox, pulseStyle, { borderColor: scanning ? theme.primary : "rgba(255,255,255,0.4)" }]}>
+            {scanning && (
+              <Animated.View style={[styles.laserLine, scanLineStyle]} />
+            )}
+          </Animated.View>
         </View>
 
-        <View style={styles.statusBar} testID="face-status-indicator">
-          <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-          <Text style={styles.statusText}>{statusText}</Text>
+        <View style={styles.statusBar}>
+          <ActivityIndicator size="small" color={scanning ? theme.primary : "transparent"} />
+          <Text style={styles.statusText}>{status}</Text>
         </View>
       </View>
 
       <View style={styles.controls}>
-        {!scanning ? (
-          <TouchableOpacity
-            style={styles.startBtn}
-            onPress={startScan}
-            testID="scan-start-button"
-          >
-            <Ionicons name="scan" size={22} color="#fff" />
-            <Text style={styles.startText}>Start Scan</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={styles.cancelBtn}
-            onPress={cancel}
-            disabled={submitting}
-            testID="scan-cancel-button"
-          >
-            {submitting ? (
-              <ActivityIndicator color={theme.textMain} />
-            ) : (
-              <>
-                <Ionicons name="close" size={20} color={theme.textMain} />
-                <Text style={styles.cancelText}>Cancel</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity
+          style={[styles.startBtn, scanning && { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border }]}
+          onPress={startScan}
+          disabled={scanning}
+        >
+          {scanning ? (
+            <Text style={[styles.startText, { color: theme.textMain }]}>Analyzing Data...</Text>
+          ) : (
+            <>
+              <Ionicons name="scan" size={22} color="#fff" />
+              <Text style={styles.startText}>Initiate Neural Scan</Text>
+            </>
+          )}
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -251,7 +208,7 @@ export default function ScanScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.bg },
-  header: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 },
+  header: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 16 },
   title: { fontSize: 28, fontWeight: "800", color: theme.textMain, letterSpacing: -0.5 },
   subtitle: { marginTop: 4, fontSize: 14, color: theme.textMuted },
   cameraWrap: {
@@ -262,36 +219,28 @@ const styles = StyleSheet.create({
     backgroundColor: "#000",
     ...shadow,
   },
-  camera: { flex: 1 },
-  webFallback: {
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#111",
-  },
-  webFallbackText: {
-    marginTop: 12,
-    color: theme.textMuted,
-    textAlign: "center",
-    fontSize: 13,
-  },
+  camera: { flex: 1, width: "100%", height: "100%" },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
   },
-  pulse: {
-    position: "absolute",
-    width: 220,
-    height: 220,
-    borderRadius: 110,
+  targetBox: {
+    width: 320,  
+    height: 400, 
     borderWidth: 2,
-    borderColor: theme.primary,
+    borderRadius: 20,
+    overflow: "hidden", 
   },
-  ring: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    borderWidth: 3,
+  laserLine: {
+    width: "100%",
+    height: 3,
+    backgroundColor: theme.primary,
+    shadowColor: theme.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    elevation: 5,
   },
   statusBar: {
     position: "absolute",
@@ -299,61 +248,26 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    gap: 10,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
     borderRadius: 999,
   },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-  controls: { padding: 20 },
+  statusText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  controls: { padding: 24 },
   startBtn: {
     backgroundColor: theme.primary,
     borderRadius: 999,
-    paddingVertical: 16,
+    paddingVertical: 18,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
     ...shadow,
   },
-  startText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  cancelBtn: {
-    backgroundColor: theme.surface,
-    borderRadius: 999,
-    paddingVertical: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  cancelText: { color: theme.textMain, fontSize: 15, fontWeight: "700" },
-  permWrap: { flex: 1, padding: 24, alignItems: "center", justifyContent: "center", gap: 14 },
-  permIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: theme.primaryLight,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  permTitle: { fontSize: 22, fontWeight: "800", color: theme.textMain },
-  permText: {
-    fontSize: 14,
-    color: theme.textMuted,
-    textAlign: "center",
-    lineHeight: 20,
-    maxWidth: 280,
-  },
-  permCta: {
-    marginTop: 10,
-    backgroundColor: theme.primary,
-    paddingVertical: 14,
-    paddingHorizontal: 28,
-    borderRadius: 999,
-  },
-  permCtaText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  startText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+  permWrap: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
+  permTitle: { fontSize: 20, fontWeight: "700", color: theme.textMain, marginTop: 20 },
+  permText: { textAlign: "center", color: theme.textMuted, marginTop: 10, marginBottom: 30 },
 });

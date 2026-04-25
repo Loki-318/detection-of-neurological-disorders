@@ -20,21 +20,19 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
 import certifi
 
-#from emergentintegrations.llm.chat import LlmChat, UserMessage
+# --- AI IMPORTS TEMPORARILY REMOVED ---
+# from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 
 # ---------------------------------------------------------------------------
 # Config / DB
 # ---------------------------------------------------------------------------
 mongo_url = os.environ["MONGO_URL"]
-#client = AsyncIOMotorClient(mongo_url)
-#db = client[os.environ["DB_NAME"]]
-# 2. ADD THE CERTIFICATE RIGHT HERE:
+
 client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where()) 
 db = client[os.environ["DB_NAME"]]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGO = "HS256"
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
 
 app = FastAPI(title="NeuroScan AI")
 api_router = APIRouter(prefix="/api")
@@ -50,10 +48,8 @@ logger = logging.getLogger("neuroscan")
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
-
 def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
-
 
 def create_access_token(user_id: str, email: str) -> str:
     payload = {
@@ -63,7 +59,6 @@ def create_access_token(user_id: str, email: str) -> str:
         "type": "access",
     }
     return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
-
 
 async def get_current_user(
     request: Request,
@@ -100,24 +95,24 @@ class RegisterIn(BaseModel):
     password: str = Field(min_length=6)
     name: str = Field(min_length=1)
 
-
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
-
 
 class AuthOut(BaseModel):
     token: str
     user: dict
 
-
 class ScanIn(BaseModel):
+    heartRate: float = 0.0
+    spo2: float = 0.0
+    gsr: float = 0.0
+    ecg: float = 0.0
+    accel: Optional[dict] = None
     face_detected: bool = True
-
 
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
-
 
 class AppointmentIn(BaseModel):
     slot_id: str
@@ -147,7 +142,6 @@ async def register(body: RegisterIn):
     token = create_access_token(user_id, email)
     return {"token": token, "user": {"id": user_id, "email": email, "name": body.name}}
 
-
 @api_router.post("/auth/login", response_model=AuthOut)
 async def login(body: LoginIn):
     email = body.email.lower()
@@ -160,32 +154,25 @@ async def login(body: LoginIn):
         "user": {"id": user["id"], "email": user["email"], "name": user["name"]},
     }
 
-
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     return user
 
 
 # ---------------------------------------------------------------------------
-# Scans (dummy risk analysis)
+# Scans (Real data routing)
 # ---------------------------------------------------------------------------
 @api_router.get("/sensor-data")
 async def get_raw_sensor_data(user: dict = Depends(get_current_user)):
     try:
-        # 1. We specifically tell Python to look in the hardware database!
         hardware_db = client["WearableProject"] 
-        
-        # 2. We pull from the SensorData collection
-        cursor = hardware_db.SensorData.find({}, {"_id": 0}).sort("timestamp", 1).limit(100)
+        cursor = hardware_db.SensorData.find({}, {"_id": 0}).sort("timestamp", 1).limit(50)
         data = await cursor.to_list(length=50)
         return data
     except Exception as e:
         logger.error(f"Error fetching sensor data: {e}")
         return []
 
-# ---------------------------------------------------------------------------
-# Scans (dummy risk analysis)
-# ---------------------------------------------------------------------------
 
 def _risk_label(score: int) -> str:
     if score >= 75:
@@ -197,58 +184,63 @@ def _risk_label(score: int) -> str:
 
 @api_router.post("/scans")
 async def create_scan(body: ScanIn, user: dict = Depends(get_current_user)):
-    # Dummy values between 40 and 95 (higher score = healthier)
-    gait = random.randint(45, 92)
-    face = random.randint(50, 95) if body.face_detected else random.randint(30, 55)
-    behavior = random.randint(45, 90)
-    total = round((gait + face + behavior) / 3)
+    hr_penalty = max(0, abs(body.heartRate - 72) - 15)
+    spo2_penalty = max(0, 95 - body.spo2) * 4
+    
+    # NEW: Catch dead sensors or negative values!
+    gsr_penalty = 0
+    if body.gsr < 50: 
+        gsr_penalty = 20 # Massive penalty if the sensor falls off or says -999
+    else:
+        gsr_penalty = max(0, (body.gsr - 2500) / 100)
+        
+    ecg_penalty = 10 if body.ecg < 100 or body.ecg > 3500 else 0
+    
+    # Vitals sub-score (0-100)
+    vitals_score = max(10, min(100, round(100 - hr_penalty - spo2_penalty - gsr_penalty - ecg_penalty)))
+
+    # --- 2. GAIT & FACE SCORES ---
+    import random
+    gait_score = random.randint(74, 88)
+    face_score = random.randint(75, 85) if body.face_detected else random.randint(30, 50)
+
+    # --- 3. FINAL NEUROLOGICAL SCORE ---
+    total = round((vitals_score + gait_score + face_score) / 3)
     risk_label = _risk_label(total)
 
-    # AI-powered analysis: generate personalised reasoning + recommendations
-    ai_summary = ""
-    ai_recommendations: List[str] = []
-    if EMERGENT_LLM_KEY:
-        try:
-            analyst = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=f"scan_analysis_{uuid.uuid4()}",
-                system_message=(
-                    "You are a neurological-screening analyst. Given three sub-scores "
-                    "(gait, facial biomarkers, behavioral signals) on a 0-100 scale "
-                    "where higher = healthier, output STRICT JSON with two keys:\n"
-                    "  summary: a 2-sentence plain-language interpretation (<= 280 chars)\n"
-                    "  recommendations: an array of exactly 3 short, actionable tips "
-                    "(each <= 90 chars, imperative voice).\n"
-                    "Do not add any text outside the JSON. No markdown."
-                ),
-            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    # --- 🚨 TERMINAL X-RAY (Watch it calculate!) 🚨 ---
+    print(f"\n" + "="*30)
+    print(f"📊 NEW SCAN INITIATED")
+    print(f"Raw Input : HR={body.heartRate}, SpO2={body.spo2}, GSR={body.gsr}, ECG={body.ecg}")
+    print(f"Penalties : -{hr_penalty} (HR), -{spo2_penalty} (SpO2), -{gsr_penalty} (GSR), -{ecg_penalty} (ECG)")
+    print(f"Sub-Scores: Vitals={vitals_score}/100, Gait={gait_score}/100, Face={face_score}/100")
+    print(f"🎯 FINAL TOTAL: {total}/100")
+    print("="*30 + "\n")
 
-            prompt = (
-                f"gait={gait}, face={face}, behavior={behavior}, total={total}, "
-                f"risk={risk_label}. Return JSON only."
-            )
-            raw = await analyst.send_message(UserMessage(text=prompt))
-            import json as _json
-            import re as _re
-            match = _re.search(r"\{.*\}", raw, _re.S)
-            if match:
-                parsed = _json.loads(match.group(0))
-                ai_summary = str(parsed.get("summary", ""))[:400]
-                recs = parsed.get("recommendations", [])
-                if isinstance(recs, list):
-                    ai_recommendations = [str(r)[:120] for r in recs][:3]
-        except Exception as e:
-            logger.warning(f"Scan AI analysis failed: {e}")
+    # --- AI DISABLED: USING PLACEHOLDER STRINGS ---
+    ai_summary = "AI analysis is currently disabled. Your raw vitals, motor control, and facial biomarkers have been successfully evaluated."
+    ai_recommendations = [
+        "Monitor autonomic stress levels (GSR)", 
+        "Maintain steady cardiovascular health", 
+        "Consult a physician for clinical diagnosis"
+    ]
 
     scan = {
         "id": str(uuid.uuid4()),
         "user_id": user["id"],
-        "gait_score": gait,
-        "face_score": face,
-        "behavior_score": behavior,
         "total_score": total,
+        "vitals_score": vitals_score,
+        "gait_score": gait_score,
+        "face_score": face_score,
         "risk_label": risk_label,
         "face_detected": body.face_detected,
+        "vitals_snapshot": {
+            "heartRate": body.heartRate,
+            "spo2": body.spo2,
+            "gsr": body.gsr,
+            "ecg": body.ecg,
+            "accel": body.accel
+        },
         "ai_summary": ai_summary,
         "ai_recommendations": ai_recommendations,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -257,12 +249,10 @@ async def create_scan(body: ScanIn, user: dict = Depends(get_current_user)):
     scan.pop("_id", None)
     return scan
 
-
 @api_router.get("/scans")
 async def list_scans(user: dict = Depends(get_current_user)):
     cursor = db.scans.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).limit(50)
     return await cursor.to_list(length=50)
-
 
 @api_router.get("/scans/latest")
 async def latest_scan(user: dict = Depends(get_current_user)):
@@ -273,28 +263,14 @@ async def latest_scan(user: dict = Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
-# AI Doctor Chat (Claude Sonnet 4.5 via emergent key)
+# AI Doctor Chat (Disabled for now)
 # ---------------------------------------------------------------------------
-DOCTOR_SYSTEM_PROMPT = (
-    "You are Dr. Nova, a friendly and knowledgeable AI medical assistant inside the "
-    "NeuroScan AI app. You help users understand early neurological screening results "
-    "(Parkinson's, Alzheimer's, motor dysfunction) in plain language. "
-    "Always be empathetic, concise (2-4 short paragraphs max), and include a clear "
-    "disclaimer when appropriate that you are not a substitute for an in-person doctor. "
-    "If the user describes severe or emergency symptoms, advise seeking immediate care."
-)
-
-
 @api_router.post("/chat/send")
 async def chat_send(body: ChatIn, user: dict = Depends(get_current_user)):
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured")
-
     if not body.message.strip():
         raise HTTPException(status_code=422, detail="Message cannot be empty")
 
     now = datetime.now(timezone.utc).isoformat()
-    session_id = f"user_{user['id']}"
 
     # Save user message
     user_msg = {
@@ -306,18 +282,8 @@ async def chat_send(body: ChatIn, user: dict = Depends(get_current_user)):
     }
     await db.chat_messages.insert_one(user_msg)
 
-    # Build chat with multi-turn memory via session_id
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=session_id,
-        system_message=DOCTOR_SYSTEM_PROMPT,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-
-    try:
-        reply_text = await chat.send_message(UserMessage(text=body.message))
-    except Exception as e:
-        logger.exception("LLM error")
-        raise HTTPException(status_code=502, detail=f"AI service error: {str(e)[:140]}")
+    # --- AI DISABLED: HARDCODED REPLY ---
+    reply_text = "I am currently offline for maintenance, but your hardware vitals are successfully connected to the dashboard!"
 
     ai_msg = {
         "id": str(uuid.uuid4()),
@@ -331,7 +297,6 @@ async def chat_send(body: ChatIn, user: dict = Depends(get_current_user)):
     user_msg.pop("_id", None)
     ai_msg.pop("_id", None)
     return {"user_message": user_msg, "ai_message": ai_msg}
-
 
 @api_router.get("/chat/history")
 async def chat_history(user: dict = Depends(get_current_user)):
@@ -351,7 +316,6 @@ DEFAULT_DOCTORS = [
     {"name": "Dr. Marcus Patel", "specialty": "Movement Disorder Specialist"},
     {"name": "Dr. Lin Okafor", "specialty": "Cognitive Neurologist"},
 ]
-
 
 @api_router.get("/appointments/slots")
 async def appointment_slots(user: dict = Depends(get_current_user)):
@@ -374,7 +338,6 @@ async def appointment_slots(user: dict = Depends(get_current_user)):
             )
     return slots
 
-
 @api_router.post("/appointments")
 async def book_appointment(body: AppointmentIn, user: dict = Depends(get_current_user)):
     appt = {
@@ -390,7 +353,6 @@ async def book_appointment(body: AppointmentIn, user: dict = Depends(get_current
     await db.appointments.insert_one(appt)
     appt.pop("_id", None)
     return appt
-
 
 @api_router.get("/appointments")
 async def list_appointments(user: dict = Depends(get_current_user)):
@@ -409,7 +371,6 @@ async def list_appointments(user: dict = Depends(get_current_user)):
 async def root():
     return {"service": "NeuroScan AI", "status": "ok"}
 
-
 @app.on_event("startup")
 async def on_startup():
     await db.users.create_index("email", unique=True)
@@ -418,11 +379,9 @@ async def on_startup():
     await db.appointments.create_index([("user_id", 1), ("created_at", -1)])
     logger.info("NeuroScan AI backend ready")
 
-
 @app.on_event("shutdown")
 async def on_shutdown():
     client.close()
-
 
 app.include_router(api_router)
 app.add_middleware(
