@@ -5,11 +5,10 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Platform,
-  Image, 
+  Dimensions,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import Animated, {
@@ -23,122 +22,99 @@ import Animated, {
 import { api } from "../../src/api";
 import { theme, shadow } from "../../src/theme";
 
+const SCREEN_HEIGHT = Dimensions.get("window").height;
+
 export default function ScanScreen() {
-  const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
   const [status, setStatus] = useState("Ready to Scan");
-  
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [insight, setInsight] = useState<string | null>(null);
+
   const cameraRef = useRef<CameraView>(null);
-
   const scanLineY = useSharedValue(0);
-  const pulseOpacity = useSharedValue(1);
 
+  // Cleanup animations when leaving the screen
   useEffect(() => {
-    return () => {
-      cancelAnimation(scanLineY);
-      cancelAnimation(pulseOpacity);
-    };
+    return () => cancelAnimation(scanLineY);
   }, []);
 
   const scanLineStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: scanLineY.value }],
   }));
 
-  const pulseStyle = useAnimatedStyle(() => ({
-    opacity: pulseOpacity.value,
-  }));
-
   const startScan = async () => {
+    // 1. Reset all states before starting
+    setInsight(null);
     setScanning(true);
     setStatus("Capturing Image...");
+    let base64Image = "";
 
-    // 1. SNAP THE PICTURE (Just to freeze the screen, not sending to DB)
+    // 2. Snap the picture
     if (cameraRef.current) {
       try {
-        const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
-        if (photo && photo.uri) {
+        const photo = await cameraRef.current.takePictureAsync({
+          quality: 0.5,
+          base64: true,
+        });
+        if (photo && photo.uri && photo.base64) {
           setCapturedImage(photo.uri);
+          base64Image = photo.base64;
+        } else {
+          throw new Error("No image data returned from camera");
         }
       } catch (e) {
-        console.warn("Failed to take picture. Proceeding with scan anyway.", e);
+        console.warn("Camera Error:", e);
+        setScanning(false);
+        setStatus("Camera Error. Please try again.");
+        return;
       }
     }
 
-    // 2. Start the sweeping laser (Travels 380px for the large box)
+    // 3. Start the visual laser sweep
     scanLineY.value = withRepeat(
-      withTiming(380, { duration: 1800, easing: Easing.inOut(Easing.ease) }),
-      -1, 
-      true 
-    );
-
-    pulseOpacity.value = withRepeat(
-      withTiming(0.4, { duration: 800, easing: Easing.inOut(Easing.ease) }),
+      withTiming(SCREEN_HEIGHT * 0.6, {
+        duration: 2000,
+        easing: Easing.inOut(Easing.ease),
+      }),
       -1,
       true
     );
 
+    // 4. Send to Backend
     try {
-      // 3. THE 20-SECOND FAKE AI PROCESSING DELAY
-      setStatus("Aligning Facial Geometry...");
-      await new Promise((r) => setTimeout(r, 2000)); // 4 seconds
+      setStatus("Running ResNet50 Analysis...");
 
-      setStatus("Extracting Micro-expressions...");
-      await new Promise((r) => setTimeout(r, 3000)); // 6 seconds
+      const result = await api.analyzeFace(base64Image);
 
-      setStatus("Running Neurological Deep Learning Model...");
-      await new Promise((r) => setTimeout(r, 5000)); // 7 seconds
-
-      // 4. Real Hardware Sync (Fetching your ESP32 data!)
-      setStatus("Syncing Live Hardware Vitals...");
-      const liveData = await api.getSensorData();
-      
-      const latest = liveData.find((d: any) => d.gsr > 0 && d.ecg > 0) || liveData[0] || null;
-
-      setStatus("Finalizing Health Score...");
-      await new Promise((r) => setTimeout(r, 2000)); // 3 seconds
-      
-      const payload = {
-        heartRate: latest?.vitals?.heart_rate || 72,
-        spo2: latest?.vitals?.spo2 || 98,
-        gsr: latest?.gsr || 1500,
-        ecg: latest?.ecg || 350,
-        accel: latest?.accel || {},
-        face_detected: true, 
-        // NOTE: We are intentionally NOT sending an image string here!
-      };
-
-      // 5. Send to Python Backend
-      const scanResult = await api.createScan(payload);
-
-      // Clean up and navigate
+      // 5. Handle Success
+      setInsight(result.summary);
       cancelAnimation(scanLineY);
       setScanning(false);
-      setStatus("Ready to Scan");
-      setCapturedImage(null); 
-      
-      router.push({
-        pathname: "/result",
-        params: { id: scanResult.id },
-      });
-
+      setStatus("Analysis Complete");
     } catch (e) {
-      console.error("Scan failed", e);
-      setStatus("Scan Failed. Please try again.");
+      // 6. Handle Failure
+      console.error("Backend Scan failed:", e);
+      setStatus("Network Error or Processing Failed.");
       cancelAnimation(scanLineY);
       setScanning(false);
-      setCapturedImage(null);
     }
   };
 
-  if (!permission) {
+  const resetScanner = () => {
+    setCapturedImage(null);
+    setInsight(null);
+    setStatus("Ready to Scan");
+    setScanning(false);
+    cancelAnimation(scanLineY);
+  };
+
+  if (!permission)
     return (
       <SafeAreaView style={styles.safe}>
         <ActivityIndicator color={theme.primary} />
       </SafeAreaView>
     );
-  }
 
   if (!permission.granted) {
     return (
@@ -147,7 +123,7 @@ export default function ScanScreen() {
           <Ionicons name="camera" size={60} color={theme.primary} />
           <Text style={styles.permTitle}>Camera Permission Required</Text>
           <Text style={styles.permText}>
-            NeuroScan needs camera access to analyze facial micro-expressions.
+            NeuroScan requires camera access for facial biomarker analysis.
           </Text>
           <TouchableOpacity style={styles.startBtn} onPress={requestPermission}>
             <Text style={styles.startText}>Allow Camera</Text>
@@ -160,47 +136,89 @@ export default function ScanScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Biometric Scan</Text>
+        <Text style={styles.title}>Facial Biomarker Scan</Text>
         <Text style={styles.subtitle}>Center your face in the frame</Text>
       </View>
 
       <View style={styles.cameraWrap}>
-        
         {capturedImage ? (
-          <Image source={{ uri: capturedImage }} style={styles.camera} />
+          <Image
+            source={{ uri: capturedImage }}
+            style={styles.camera}
+            resizeMode="cover"
+          />
         ) : (
           <CameraView ref={cameraRef} style={styles.camera} facing="front" />
         )}
 
+        {/* Laser Overlay */}
         <View style={styles.overlay} pointerEvents="none">
-          <Animated.View style={[styles.targetBox, pulseStyle, { borderColor: scanning ? theme.primary : "rgba(255,255,255,0.4)" }]}>
-            {scanning && (
-              <Animated.View style={[styles.laserLine, scanLineStyle]} />
-            )}
-          </Animated.View>
+          {scanning && (
+            <Animated.View style={[styles.laserLine, scanLineStyle]} />
+          )}
         </View>
 
+        {/* Bottom Status Bar */}
         <View style={styles.statusBar}>
-          <ActivityIndicator size="small" color={scanning ? theme.primary : "transparent"} />
+          <ActivityIndicator
+            size="small"
+            color={scanning ? theme.primary : "transparent"}
+          />
           <Text style={styles.statusText}>{status}</Text>
         </View>
+
+        {/* Top Insight Badge */}
+        {insight && (
+          <View style={styles.insightBadge}>
+            <Ionicons name="medical" size={20} color="#fff" />
+            <Text style={styles.insightText}>{insight}</Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.controls}>
-        <TouchableOpacity
-          style={[styles.startBtn, scanning && { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border }]}
-          onPress={startScan}
-          disabled={scanning}
-        >
-          {scanning ? (
-            <Text style={[styles.startText, { color: theme.textMain }]}>Analyzing Data...</Text>
-          ) : (
-            <>
-              <Ionicons name="scan" size={22} color="#fff" />
-              <Text style={styles.startText}>Initiate Neural Scan</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {insight ? (
+          <TouchableOpacity
+            style={[
+              styles.startBtn,
+              {
+                backgroundColor: theme.surface,
+                borderWidth: 1,
+                borderColor: theme.border,
+              },
+            ]}
+            onPress={resetScanner}
+          >
+            <Ionicons name="refresh" size={22} color={theme.textMain} />
+            <Text style={[styles.startText, { color: theme.textMain }]}>
+              Scan Again
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[
+              styles.startBtn,
+              scanning && {
+                backgroundColor: theme.surface,
+                borderWidth: 1,
+                borderColor: theme.border,
+              },
+            ]}
+            onPress={startScan}
+            disabled={scanning}
+          >
+            {scanning ? (
+              <Text style={[styles.startText, { color: theme.textMain }]}>
+                Analyzing...
+              </Text>
+            ) : (
+              <>
+                <Ionicons name="scan" size={22} color="#fff" />
+                <Text style={styles.startText}>Initiate Scan</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -209,32 +227,28 @@ export default function ScanScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.bg },
   header: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 16 },
-  title: { fontSize: 28, fontWeight: "800", color: theme.textMain, letterSpacing: -0.5 },
+  title: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: theme.textMain,
+    letterSpacing: -0.5,
+  },
   subtitle: { marginTop: 4, fontSize: 14, color: theme.textMuted },
+
   cameraWrap: {
-    marginHorizontal: 20,
-    borderRadius: 28,
+    marginHorizontal: 16,
+    borderRadius: 20,
     overflow: "hidden",
     flex: 1,
     backgroundColor: "#000",
     ...shadow,
   },
   camera: { flex: 1, width: "100%", height: "100%" },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  targetBox: {
-    width: 320,  
-    height: 400, 
-    borderWidth: 2,
-    borderRadius: 20,
-    overflow: "hidden", 
-  },
+  overlay: { ...StyleSheet.absoluteFillObject },
+
   laserLine: {
     width: "100%",
-    height: 3,
+    height: 4,
     backgroundColor: theme.primary,
     shadowColor: theme.primary,
     shadowOffset: { width: 0, height: 0 },
@@ -242,6 +256,7 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 5,
   },
+
   statusBar: {
     position: "absolute",
     bottom: 20,
@@ -255,6 +270,26 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   statusText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+
+  insightBadge: {
+    position: "absolute",
+    top: 20,
+    alignSelf: "center",
+    backgroundColor: theme.primary,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 16,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+  },
+  insightText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+
   controls: { padding: 24 },
   startBtn: {
     backgroundColor: theme.primary,
@@ -267,7 +302,13 @@ const styles = StyleSheet.create({
     ...shadow,
   },
   startText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+
   permWrap: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
   permTitle: { fontSize: 20, fontWeight: "700", color: theme.textMain, marginTop: 20 },
-  permText: { textAlign: "center", color: theme.textMuted, marginTop: 10, marginBottom: 30 },
+  permText: {
+    textAlign: "center",
+    color: theme.textMuted,
+    marginTop: 10,
+    marginBottom: 30,
+  },
 });

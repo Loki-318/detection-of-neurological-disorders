@@ -26,13 +26,16 @@ async function request<T>(
     const token = await getToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
   }
+  
   const res = await fetch(`${BASE}/api${path}`, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
   });
+  
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
+  
   if (!res.ok) {
     const msg =
       typeof data?.detail === "string"
@@ -45,33 +48,50 @@ async function request<T>(
   return data as T;
 }
 
+export interface ScanResponse {
+  id: string;
+  total_score: number;
+  vitals_score: number;
+  gait_score: number; 
+  face_score: number;
+  risk_label: string; 
+  face_detected: boolean;
+  ai_summary: string; 
+  ai_recommendations: string[];
+  created_at: string;
+}
+
 export const api = {
+  // Auth
   register: (email: string, password: string, name: string) =>
     request<{ token: string; user: any }>("/auth/register", "POST", { email, password, name }, false),
   login: (email: string, password: string) =>
     request<{ token: string; user: any }>("/auth/login", "POST", { email, password }, false),
   me: () => request<any>("/auth/me"),
 
+  // Scans
   createScan: (data: {
     heartRate: number;
     spo2: number;
     gsr: number;
     ecg: number;
-    accel?: any;
     face_detected: boolean;
-}) =>
-  request<any>("/scans", "POST", data),
+  }) => request<ScanResponse>("/scans", "POST", data),
 
-  latestScan: () => request<any>("/scans/latest"),
-  listScans: () => request<any[]>("/scans"),
-  sendChat: (message: string) =>
-    request<{ user_message: any; ai_message: any }>("/chat/send", "POST", { message }),
-  chatHistory: () => request<any[]>("/chat/history"),
-  slots: () => request<any[]>("/appointments/slots"),
-  book: (slot_id: string, doctor: string, date: string, time: string) =>
-    request<any>("/appointments", "POST", { slot_id, doctor, date, time }),
-  myAppointments: () => request<any[]>("/appointments"),
+  analyzeFace: (base64Image: string) => 
+    request<{ summary: string }>("/scans/face", "POST", { image: base64Image }),
+
+  latestScan: () => request<ScanResponse>("/scans/latest"),
+  listScans: () => request<ScanResponse[]>("/scans"),
   
-  // The missing bridge to your MongoDB data!
+  // Data Streams
+  // Existing Biometrics
   getSensorData: () => request<any[]>("/sensor-data"),
+  
+  // 🚨 NEW: Gait data from 'newdata' collection
+ // 🚨 NEW: Updated to expect the true model output
+  getGaitData: () => request<{ 
+    raw_data: any[], 
+    timeline: Array<{ score: number, class: string, timestamp: string }> 
+  }>("/gait-data"),
 };
