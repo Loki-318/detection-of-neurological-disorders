@@ -22,7 +22,7 @@ export async function clearToken(): Promise<void> {
 async function request<T>(
   path: string,
   method: string = "GET",
-  body?: any,
+  body?: unknown,
   auth: boolean = true
 ): Promise<T> {
   const headers: Record<string, string> = {
@@ -32,7 +32,7 @@ async function request<T>(
   if (auth) {
     const token = await getToken();
     if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+      headers.Authorization = `Bearer ${token}`;
     }
   }
 
@@ -65,17 +65,21 @@ async function request<T>(
   return data as T;
 }
 
-export interface ScanResponse {
+export interface AuthUser {
   id: string;
-  total_score: number;
-  vitals_score: number;
-  gait_score: number;
-  face_score: number;
-  risk_label: string;
-  face_detected: boolean;
-  ai_summary: string;
-  ai_recommendations: string[];
-  created_at: string;
+  email: string;
+  name: string;
+  created_at?: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: AuthUser;
+}
+
+export interface FacePartResult {
+  predicted_class: string;
+  class_probs: Record<string, number>;
 }
 
 export interface FaceAnalysisResponse {
@@ -84,24 +88,42 @@ export interface FaceAnalysisResponse {
   type: "face";
   created_at: string;
   result: {
-    eye: {
-      predicted_class: string;
-      class_probs: Record<string, number>;
-    };
-    eyebrow: {
-      predicted_class: string;
-      class_probs: Record<string, number>;
-    };
-    mouth: {
-      predicted_class: string;
-      class_probs: Record<string, number>;
-    };
+    eye: FacePartResult;
+    eyebrow: FacePartResult;
+    mouth: FacePartResult;
   };
+}
+
+export type ScanHistoryItem = FaceAnalysisResponse;
+
+export interface SensorDataItem {
+  timestamp?: string;
+  accel?: {
+    x?: number;
+    y?: number;
+    z?: number;
+  };
+  gyro?: {
+    x?: number;
+    y?: number;
+    z?: number;
+  };
+  [key: string]: any;
+}
+
+export interface GaitTimelineItem {
+  score: number;
+  class: string;
+}
+
+export interface GaitDataResponse {
+  raw_data: SensorDataItem[];
+  timeline: GaitTimelineItem[];
 }
 
 export const api = {
   register: (email: string, password: string, name: string) =>
-    request<{ token: string; user: any }>(
+    request<AuthResponse>(
       "/auth/register",
       "POST",
       { email, password, name },
@@ -109,22 +131,14 @@ export const api = {
     ),
 
   login: (email: string, password: string) =>
-    request<{ token: string; user: any }>(
+    request<AuthResponse>(
       "/auth/login",
       "POST",
       { email, password },
       false
     ),
 
-  me: () => request<any>("/auth/me"),
-
-  createScan: (data: {
-    heartRate: number;
-    spo2: number;
-    gsr: number;
-    ecg: number;
-    face_detected: boolean;
-  }) => request<ScanResponse>("/scans", "POST", data),
+  me: () => request<AuthUser>("/auth/me"),
 
   analyzeFace: (base64Image: string) =>
     request<FaceAnalysisResponse>("/scans/face", "POST", {
@@ -133,15 +147,9 @@ export const api = {
         : `data:image/jpeg;base64,${base64Image}`,
     }),
 
-  latestScan: () => request<ScanResponse>("/scans/latest"),
+  listScans: () => request<ScanHistoryItem[]>("/scans"),
 
-  listScans: () => request<ScanResponse[]>("/scans"),
+  getSensorData: () => request<SensorDataItem[]>("/sensor-data"),
 
-  getSensorData: () => request<any[]>("/sensor-data"),
-
-  getGaitData: () =>
-    request<{
-      raw_data: any[];
-      timeline: Array<{ score: number; class: string }>;
-    }>("/gait-data"),
+  getGaitData: () => request<GaitDataResponse>("/gait-data"),
 };
