@@ -5,12 +5,9 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
-  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import * as ImagePicker from "expo-image-picker";
 import { api } from "../../src/api";
 import { useRouter } from "expo-router";
 
@@ -29,10 +26,6 @@ export default function Dashboard() {
     gsr: 2100,
   });
   const [tremorLabel, setTremorLabel] = useState("No Tremor");
-
-  const [faceImage, setFaceImage] = useState<string | null>(null);
-  const [faceInsight, setFaceInsight] = useState<string | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const [displaySamples, setDisplaySamples] = useState<number[]>(
     Array(45).fill(12)
@@ -181,248 +174,206 @@ export default function Dashboard() {
 
   const isDanger = tremorLabel === "High Tremor";
 
-  const processFaceImage = async (uri: string, base64: string) => {
-    setFaceImage(uri);
-    setFaceInsight(null);
-    setIsAnalyzing(true);
-    setPausePolling(true);
+  const Sidebar = ({ active }: { active: "home" | "scan" | "history" }) => (
+    <View style={styles.sidebar}>
+      <Text style={styles.sidebarTitle}>NeuroSense</Text>
 
-    try {
-      const payload = base64.startsWith("data:image")
-        ? base64
-        : `data:image/jpeg;base64,${base64}`;
+      <TouchableOpacity
+        style={active === "home" ? styles.navItemActive : styles.navItem}
+        onPress={() => router.push("/")}
+      >
+        <Ionicons
+          name="home"
+          size={20}
+          color={active === "home" ? "#fff" : "#4c8dff"}
+        />
+        <Text
+          style={active === "home" ? styles.navTextActive : styles.navText}
+        >
+          Home
+        </Text>
+      </TouchableOpacity>
 
-      const res = await api.analyzeFace(payload);
-      const result = res?.result ?? res;
+      <TouchableOpacity
+        style={active === "scan" ? styles.navItemActive : styles.navItem}
+        onPress={() => router.push("/scan")}
+      >
+        <Ionicons
+          name="scan"
+          size={20}
+          color={active === "scan" ? "#fff" : "#4c8dff"}
+        />
+        <Text
+          style={active === "scan" ? styles.navTextActive : styles.navText}
+        >
+          Scan
+        </Text>
+      </TouchableOpacity>
 
-      setFaceInsight(
-        `Eye: ${result?.eye?.predicted_class ?? "Unknown"} | Eyebrow: ${
-          result?.eyebrow?.predicted_class ?? "Unknown"
-        } | Mouth: ${result?.mouth?.predicted_class ?? "Unknown"}`
-      );
-    } catch (e) {
-      console.log("Face API error:", e);
-      setFaceInsight("Error reaching AI. Try again.");
-    } finally {
-      setIsAnalyzing(false);
-      setPausePolling(false);
-    }
-  };
-
-  const uploadImage = async () => {
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.5,
-        base64: true,
-      });
-
-      if (result.canceled) return;
-
-      const asset = result.assets?.[0];
-      if (!asset?.base64 || !asset?.uri) {
-        setFaceInsight("Could not read selected image. Try again.");
-        return;
-      }
-
-      await processFaceImage(asset.uri, asset.base64);
-    } catch (error) {
-      console.log("Upload image error:", error);
-      setFaceInsight("Image upload failed. Try again.");
-      setIsAnalyzing(false);
-      setPausePolling(false);
-    }
-  };
-
-  const scanFace = () => {
-    if (isAnalyzing) return;
-    router.push("/scan");
-  };
+      <TouchableOpacity
+        style={active === "history" ? styles.navItemActive : styles.navItem}
+        onPress={() => router.push("/history")}
+      >
+        <Ionicons
+          name="time"
+          size={20}
+          color={active === "history" ? "#fff" : "#4c8dff"}
+        />
+        <Text
+          style={active === "history" ? styles.navTextActive : styles.navText}
+        >
+          History
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <Text style={styles.title}>NeuroSense AI</Text>
-          <Text style={styles.subtitle}>Neurological Disease Detection</Text>
-        </View>
+      <View style={styles.mainRow}>
+        <Sidebar active="home" />
 
-        <View style={styles.card}>
-          <View style={styles.row}>
-            <Ionicons
-              name="pulse"
-              size={22}
-              color={isDanger ? "#ff4d4d" : "#4c8dff"}
-            />
-            <Text style={styles.cardTitle}>Live Gait Analysis</Text>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          style={styles.content}
+        >
+          <View style={styles.header}>
+            <Text style={styles.title}>NeuroSense AI</Text>
+            <Text style={styles.subtitle}>Neurological Disease Detection</Text>
           </View>
-          <Text style={styles.smallText}>Smart Armband Tremor Monitoring</Text>
 
-          <View style={styles.gaitMain}>
-            <View style={styles.gaitGraph}>
-              <View style={styles.waveContainer}>
-                {displayWave.map((value, index) => (
-                  <View
-                    key={index}
-                    style={[
-                      styles.waveBar,
-                      {
-                        height: value,
-                        backgroundColor: isDanger ? "#ff4d4d" : "#4c8dff",
-                      },
-                    ]}
-                  />
-                ))}
-              </View>
+          {/* Gait / tremor card */}
+          <View style={styles.card}>
+            <View style={styles.row}>
+              <Ionicons
+                name="pulse"
+                size={22}
+                color={isDanger ? "#ff4d4d" : "#4c8dff"}
+              />
+              <Text style={styles.cardTitle}>Live Gait Analysis</Text>
             </View>
+            <Text style={styles.smallText}>Smart Armband Tremor Monitoring</Text>
 
-            <View style={styles.gaitStatus}>
-              <Text style={styles.statusTitle}>AI Assessment</Text>
-
-              <View
-                style={[
-                  styles.statusBadge,
-                  { backgroundColor: isDanger ? "#ffe5e5" : "#e8fff1" },
-                ]}
-              >
-                <Text
-                  style={{
-                    color: isDanger ? "#ff4d4d" : "#18a558",
-                    fontWeight: "700",
-                    textAlign: "center",
-                  }}
-                >
-                  {tremorLabel}
-                </Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Live Biometrics</Text>
-          <View style={styles.bioGrid}>
-            <View style={styles.bioCard}>
-              <Ionicons name="heart" size={24} color="#ff4d4d" />
-              <Text style={styles.bioLabel}>Heart Rate</Text>
-              <Text style={styles.bioValue}>
-                {vitals.hr !== null ? `${vitals.hr} bpm` : "--"}
-              </Text>
-              <Text style={styles.normal}>Dynamic</Text>
-            </View>
-
-            <View style={styles.bioCard}>
-              <Ionicons name="water" size={24} color="#4c8dff" />
-              <Text style={styles.bioLabel}>SpO2</Text>
-              <Text style={styles.bioValue}>
-                {vitals.spo2 !== null ? `${vitals.spo2}%` : "--"}
-              </Text>
-              <Text style={styles.normal}>Dynamic</Text>
-            </View>
-
-            <View style={styles.bioCard}>
-              <Ionicons name="analytics" size={24} color="#7a5cff" />
-              <Text style={styles.bioLabel}>GSR Stress</Text>
-              <Text style={styles.bioValue}>{vitals.gsr} Ω</Text>
-              <Text style={styles.normal}>Dynamic</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Face Analysis</Text>
-
-          <View style={styles.faceRow}>
-            <View style={styles.faceLeft}>
-              <View style={styles.facePreview}>
-                {faceImage ? (
-                  <>
-                    <Image
-                      source={{ uri: faceImage }}
-                      style={styles.faceImage}
-                      resizeMode="contain"
+            <View style={styles.gaitMain}>
+              <View style={styles.gaitGraph}>
+                <View style={styles.waveContainer}>
+                  {displayWave.map((value, index) => (
+                    <View
+                      key={index}
+                      style={[
+                        styles.waveBar,
+                        {
+                          height: value,
+                          backgroundColor: isDanger ? "#ff4d4d" : "#4c8dff",
+                        },
+                      ]}
                     />
-                    {isAnalyzing && (
-                      <View style={styles.previewOverlay}>
-                        <ActivityIndicator size="large" color="#fff" />
-                      </View>
-                    )}
-                  </>
-                ) : (
-                  <View style={styles.placeholder}>
-                    <Ionicons
-                      name="person-circle-outline"
-                      size={80}
-                      color="#999"
-                    />
-                    <Text style={styles.placeholderText}>
-                      Scan or upload a face
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              <View style={styles.buttonRowLeft}>
-                <TouchableOpacity
-                  style={[styles.scanBtn, isAnalyzing && styles.disabledBtn]}
-                  onPress={scanFace}
-                  disabled={isAnalyzing}
-                >
-                  <Ionicons name="camera" size={20} color="#fff" />
-                  <Text style={styles.btnText}>Scan</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.uploadBtn, isAnalyzing && styles.disabledBtn]}
-                  onPress={uploadImage}
-                  disabled={isAnalyzing}
-                >
-                  <Ionicons name="image" size={20} color="#000" />
-                  <Text style={styles.uploadText}>Upload Image</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.faceInfo}>
-              <Text style={styles.faceInfoTitle}>Face Analysis Results</Text>
-
-              <Text style={styles.faceStatus}>
-                {isAnalyzing
-                  ? "Analyzing facial biomarkers, please wait a few seconds..."
-                  : faceInsight
-                  ? "Analysis complete:"
-                  : "Tap Scan or Upload Image to start an analysis."}
-              </Text>
-
-              {faceInsight && !isAnalyzing && (
-                <View style={styles.faceInsightBox}>
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={16}
-                    color="#18a558"
-                  />
-                  <View style={{ flexShrink: 1 }}>
-                    {faceInsight.split("|").map((part) => (
-                      <Text key={part} style={styles.faceInsightText}>
-                        {part.trim()}
-                      </Text>
-                    ))}
-                  </View>
+                  ))}
                 </View>
-              )}
+              </View>
+
+              <View style={styles.gaitStatus}>
+                <Text style={styles.statusTitle}>AI Assessment</Text>
+
+                <View
+                  style={[
+                    styles.statusBadge,
+                    { backgroundColor: isDanger ? "#ffe5e5" : "#e8fff1" },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: isDanger ? "#ff4d4d" : "#18a558",
+                      fontWeight: "700",
+                      textAlign: "center",
+                    }}
+                  >
+                    {tremorLabel}
+                  </Text>
+                </View>
+              </View>
             </View>
           </View>
-        </View>
-      </ScrollView>
+
+          {/* Biometrics */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Live Biometrics</Text>
+            <View style={styles.bioGrid}>
+              <View style={styles.bioCard}>
+                <Ionicons name="heart" size={24} color="#ff4d4d" />
+                <Text style={styles.bioLabel}>Heart Rate</Text>
+                <Text style={styles.bioValue}>
+                  {vitals.hr !== null ? `${vitals.hr} bpm` : "--"}
+                </Text>
+                <Text style={styles.normal}>Dynamic</Text>
+              </View>
+
+              <View style={styles.bioCard}>
+                <Ionicons name="water" size={24} color="#4c8dff" />
+                <Text style={styles.bioLabel}>SpO2</Text>
+                <Text style={styles.bioValue}>
+                  {vitals.spo2 !== null ? `${vitals.spo2}%` : "--"}
+                </Text>
+                <Text style={styles.normal}>Dynamic</Text>
+              </View>
+
+              <View style={styles.bioCard}>
+                <Ionicons name="analytics" size={24} color="#7a5cff" />
+                <Text style={styles.bioLabel}>GSR Stress</Text>
+                <Text style={styles.bioValue}>{vitals.gsr} Ω</Text>
+                <Text style={styles.normal}>Dynamic</Text>
+              </View>
+            </View>
+          </View>
+        </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f5f7fb" },
+  mainRow: { flex: 1, flexDirection: "row" },
+  sidebar: {
+    width: 96,
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+    backgroundColor: "#111827",
+  },
+  sidebarTitle: {
+    color: "#e5e7eb",
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  navItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  navItemActive: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    marginBottom: 8,
+    backgroundColor: "#4c8dff",
+  },
+  navText: { color: "#e5e7eb", fontSize: 12, fontWeight: "600" },
+  navTextActive: { color: "#ffffff", fontSize: 12, fontWeight: "700" },
+  content: { flex: 1 },
+
   header: { padding: 20, paddingTop: 10 },
   title: { fontSize: 30, fontWeight: "800", color: "#111" },
   subtitle: { color: "#666", marginTop: 4, fontSize: 15 },
+
   card: {
     backgroundColor: "#fff",
     marginHorizontal: 16,
@@ -465,6 +416,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+
   bioGrid: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -482,102 +434,4 @@ const styles = StyleSheet.create({
   bioLabel: { marginTop: 8, color: "#666", fontSize: 12 },
   bioValue: { fontSize: 18, fontWeight: "700", marginTop: 8, color: "#111" },
   normal: { marginTop: 6, color: "#18a558", fontWeight: "700", fontSize: 12 },
-  faceRow: {
-    flexDirection: "row",
-    marginTop: 20,
-    gap: 16,
-  },
-  faceLeft: {
-    flex: 0.9,
-  },
-  facePreview: {
-    width: "100%",
-    height: 260,
-    borderRadius: 20,
-    overflow: "hidden",
-    backgroundColor: "#f2f2f2",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  faceImage: {
-    width: "100%",
-    height: "100%",
-  },
-  previewOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  placeholder: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 24,
-  },
-  placeholderText: {
-    marginTop: 8,
-    color: "#777",
-    fontSize: 13,
-  },
-  buttonRowLeft: {
-    flexDirection: "row",
-    marginTop: 12,
-    gap: 12,
-  },
-  faceInfo: {
-    flex: 1.1,
-    justifyContent: "flex-start",
-  },
-  faceInfoTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#111",
-    marginBottom: 8,
-  },
-  faceStatus: {
-    fontSize: 13,
-    color: "#666",
-    marginBottom: 12,
-  },
-  faceInsightBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "#e8fff1",
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  faceInsightText: {
-    color: "#155c31",
-    fontSize: 13,
-    flexShrink: 1,
-  },
-  scanBtn: {
-    flex: 1,
-    backgroundColor: "#4c8dff",
-    height: 44,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 8,
-  },
-  uploadBtn: {
-    flex: 1,
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#ddd",
-    height: 44,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 8,
-  },
-  disabledBtn: {
-    opacity: 0.6,
-  },
-  btnText: { color: "#fff", fontWeight: "700" },
-  uploadText: { color: "#111", fontWeight: "700" },
 });

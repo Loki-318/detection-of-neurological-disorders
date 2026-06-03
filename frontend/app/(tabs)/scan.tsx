@@ -5,220 +5,402 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Dimensions,
   Image,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withRepeat,
-  withTiming,
-  Easing,
-  cancelAnimation,
-} from "react-native-reanimated";
+import * as ImagePicker from "expo-image-picker";
 import { api } from "../../src/api";
 import { theme, shadow } from "../../src/theme";
+import { useRouter } from "expo-router";
 
-const SCREEN_HEIGHT = Dimensions.get("window").height;
+type FacePartResult = {
+  predicted_class: string;
+  class_probs: Record<string, number>;
+};
+
+type FaceScanResponse = {
+  id: string;
+  user_id: string;
+  type: "face";
+  created_at: string;
+  result: {
+    eye: FacePartResult;
+    eyebrow: FacePartResult;
+    mouth: FacePartResult;
+  };
+};
 
 export default function ScanScreen() {
+  const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
-  const [scanning, setScanning] = useState(false);
+
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState("Ready to Scan");
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [scanResult, setScanResult] = useState<FaceScanResponse | null>(null);
   const [insight, setInsight] = useState<string | null>(null);
 
   const cameraRef = useRef<CameraView>(null);
-  const scanLineY = useSharedValue(0);
 
-  // Cleanup animations when leaving the screen
   useEffect(() => {
-    return () => cancelAnimation(scanLineY);
+    (async () => {
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+    })();
   }, []);
 
-  const scanLineStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: scanLineY.value }],
-  }));
+  const Sidebar = ({ active }: { active: "home" | "scan" | "history" }) => (
+    <View style={styles.sidebar}>
+      <Text style={styles.sidebarTitle}>NeuroSense</Text>
 
-  const startScan = async () => {
-    // 1. Reset all states before starting
+      <TouchableOpacity
+        style={active === "home" ? styles.navItemActive : styles.navItem}
+        onPress={() => router.push("/")}
+      >
+        <Ionicons
+          name="home"
+          size={20}
+          color={active === "home" ? "#fff" : "#4c8dff"}
+        />
+        <Text
+          style={active === "home" ? styles.navTextActive : styles.navText}
+        >
+          Home
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={active === "scan" ? styles.navItemActive : styles.navItem}
+        onPress={() => router.push("/scan")}
+      >
+        <Ionicons
+          name="scan"
+          size={20}
+          color={active === "scan" ? "#fff" : "#4c8dff"}
+        />
+        <Text
+          style={active === "scan" ? styles.navTextActive : styles.navText}
+        >
+          Scan
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={active === "history" ? styles.navItemActive : styles.navItem}
+        onPress={() => router.push("/history")}
+      >
+        <Ionicons
+          name="time"
+          size={20}
+          color={active === "history" ? "#fff" : "#4c8dff"}
+        />
+        <Text
+          style={active === "history" ? styles.navTextActive : styles.navText}
+        >
+          History
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const getTopConfidence = (part?: FacePartResult) => {
+    if (!part?.class_probs) return null;
+    const values = Object.values(part.class_probs);
+    if (!values.length) return null;
+    return Math.max(...values);
+  };
+
+  const toPercent = (value?: number | null) => {
+    if (value == null || Number.isNaN(value)) return "N/A";
+    return `${(value * 100).toFixed(1)}%`;
+  };
+
+  const buildInsightText = (data: FaceScanResponse) => {
+    const eye = data.result.eye;
+    const eyebrow = data.result.eyebrow;
+    const mouth = data.result.mouth;
+
+    const eyeConfidence = toPercent(getTopConfidence(eye));
+    const eyebrowConfidence = toPercent(getTopConfidence(eyebrow));
+    const mouthConfidence = toPercent(getTopConfidence(mouth));
+
+    return [
+      `Eye: ${eye.predicted_class} (${eyeConfidence})`,
+      `Eyebrow: ${eyebrow.predicted_class} (${eyebrowConfidence})`,
+      `Mouth: ${mouth.predicted_class} (${mouthConfidence})`,
+    ].join(" • ");
+  };
+
+  const analyzeBase64 = async (base64: string) => {
+    setIsProcessing(true);
     setInsight(null);
-    setScanning(true);
-    setStatus("Capturing Image...");
-    let base64Image = "";
+    setScanResult(null);
+    setStatus("Running face analysis...");
 
-    // 2. Snap the picture
-    if (cameraRef.current) {
+    try {
+      const result: FaceScanResponse = await api.analyzeFace(base64);
+      setScanResult(result);
+      setInsight(buildInsightText(result));
+      setStatus("Analysis Complete");
+    } catch (e) {
+      console.error("Backend face scan failed:", e);
+      setStatus("Network Error or Processing Failed.");
+      setInsight(null);
+      setScanResult(null);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleScanPress = async () => {
+    if (!isCameraOpen) {
+      setCapturedImage(null);
+      setInsight(null);
+      setScanResult(null);
+      setStatus("Camera ready. Click picture to capture.");
+      setIsCameraOpen(true);
+      return;
+    }
+
+    if (cameraRef.current && !isProcessing) {
       try {
+        setStatus("Capturing Image...");
         const photo = await cameraRef.current.takePictureAsync({
           quality: 0.5,
           base64: true,
         });
-        if (photo && photo.uri && photo.base64) {
-          setCapturedImage(photo.uri);
-          base64Image = photo.base64;
-        } else {
+
+        if (!photo?.uri || !photo?.base64) {
           throw new Error("No image data returned from camera");
         }
+
+        setCapturedImage(photo.uri);
+        setIsCameraOpen(false);
+        setStatus("Sending image to server...");
+
+        await analyzeBase64(photo.base64);
       } catch (e) {
         console.warn("Camera Error:", e);
-        setScanning(false);
         setStatus("Camera Error. Please try again.");
-        return;
+        setIsCameraOpen(false);
       }
     }
+  };
 
-    // 3. Start the visual laser sweep
-    scanLineY.value = withRepeat(
-      withTiming(SCREEN_HEIGHT * 0.6, {
-        duration: 2000,
-        easing: Easing.inOut(Easing.ease),
-      }),
-      -1,
-      true
-    );
-
-    // 4. Send to Backend
+  const uploadImage = async () => {
     try {
-      setStatus("Running ResNet50 Analysis...");
+      setInsight(null);
+      setScanResult(null);
+      setStatus("Opening gallery...");
+      setIsCameraOpen(false);
 
-      const result = await api.analyzeFace(base64Image);
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.6,
+        base64: true,
+      });
 
-      // 5. Handle Success
-      setInsight(result.summary);
-      cancelAnimation(scanLineY);
-      setScanning(false);
-      setStatus("Analysis Complete");
+      if (result.canceled) {
+        setStatus("Ready to Scan");
+        return;
+      }
+
+      const asset = result.assets?.[0];
+      if (!asset?.base64 || !asset?.uri) {
+        setStatus("Could not read selected image. Try again.");
+        return;
+      }
+
+      setCapturedImage(asset.uri);
+      setStatus("Sending image to server...");
+
+      await analyzeBase64(asset.base64);
     } catch (e) {
-      // 6. Handle Failure
-      console.error("Backend Scan failed:", e);
-      setStatus("Network Error or Processing Failed.");
-      cancelAnimation(scanLineY);
-      setScanning(false);
+      console.log("Upload image error:", e);
+      setStatus("Image upload failed. Try again.");
+      setIsProcessing(false);
     }
   };
 
-  const resetScanner = () => {
-    setCapturedImage(null);
-    setInsight(null);
-    setStatus("Ready to Scan");
-    setScanning(false);
-    cancelAnimation(scanLineY);
+  const renderResultCard = (
+    label: string,
+    icon: keyof typeof Ionicons.glyphMap,
+    part: FacePartResult | undefined
+  ) => {
+    if (!part) return null;
+
+    return (
+      <View style={styles.resultCard}>
+        <View style={styles.resultHeader}>
+          <Ionicons name={icon} size={18} color="#4c8dff" />
+          <Text style={styles.resultLabel}>{label}</Text>
+        </View>
+
+        <Text style={styles.resultPrediction}>{part.predicted_class}</Text>
+        <Text style={styles.resultConfidence}>
+          Confidence: {toPercent(getTopConfidence(part))}
+        </Text>
+      </View>
+    );
   };
 
-  if (!permission)
+  if (!permission) {
     return (
       <SafeAreaView style={styles.safe}>
         <ActivityIndicator color={theme.primary} />
       </SafeAreaView>
     );
+  }
 
   if (!permission.granted) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.permWrap}>
-          <Ionicons name="camera" size={60} color={theme.primary} />
-          <Text style={styles.permTitle}>Camera Permission Required</Text>
-          <Text style={styles.permText}>
-            NeuroScan requires camera access for facial biomarker analysis.
-          </Text>
-          <TouchableOpacity style={styles.startBtn} onPress={requestPermission}>
-            <Text style={styles.startText}>Allow Camera</Text>
-          </TouchableOpacity>
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.mainRow}>
+          <Sidebar active="scan" />
+          <View style={[styles.content, { justifyContent: "center" }]}>
+            <View style={styles.permWrap}>
+              <Ionicons name="camera" size={60} color={theme.primary} />
+              <Text style={styles.permTitle}>Camera Permission Required</Text>
+              <Text style={styles.permText}>
+                NeuroScan requires camera access for facial biomarker analysis.
+              </Text>
+              <TouchableOpacity
+                style={styles.startBtn}
+                onPress={requestPermission}
+              >
+                <Text style={styles.startText}>Allow Camera</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Facial Biomarker Scan</Text>
-        <Text style={styles.subtitle}>Center your face in the frame</Text>
-      </View>
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.mainRow}>
+        <Sidebar active="scan" />
 
-      <View style={styles.cameraWrap}>
-        {capturedImage ? (
-          <Image
-            source={{ uri: capturedImage }}
-            style={styles.camera}
-            resizeMode="cover"
-          />
-        ) : (
-          <CameraView ref={cameraRef} style={styles.camera} facing="front" />
-        )}
-
-        {/* Laser Overlay */}
-        <View style={styles.overlay} pointerEvents="none">
-          {scanning && (
-            <Animated.View style={[styles.laserLine, scanLineStyle]} />
-          )}
-        </View>
-
-        {/* Bottom Status Bar */}
-        <View style={styles.statusBar}>
-          <ActivityIndicator
-            size="small"
-            color={scanning ? theme.primary : "transparent"}
-          />
-          <Text style={styles.statusText}>{status}</Text>
-        </View>
-
-        {/* Top Insight Badge */}
-        {insight && (
-          <View style={styles.insightBadge}>
-            <Ionicons name="medical" size={20} color="#fff" />
-            <Text style={styles.insightText}>{insight}</Text>
-          </View>
-        )}
-      </View>
-
-      <View style={styles.controls}>
-        {insight ? (
-          <TouchableOpacity
-            style={[
-              styles.startBtn,
-              {
-                backgroundColor: theme.surface,
-                borderWidth: 1,
-                borderColor: theme.border,
-              },
-            ]}
-            onPress={resetScanner}
-          >
-            <Ionicons name="refresh" size={22} color={theme.textMain} />
-            <Text style={[styles.startText, { color: theme.textMain }]}>
-              Scan Again
-            </Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[
-              styles.startBtn,
-              scanning && {
-                backgroundColor: theme.surface,
-                borderWidth: 1,
-                borderColor: theme.border,
-              },
-            ]}
-            onPress={startScan}
-            disabled={scanning}
-          >
-            {scanning ? (
-              <Text style={[styles.startText, { color: theme.textMain }]}>
-                Analyzing...
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.content}>
+            <View style={styles.header}>
+              <Text style={styles.title}>Facial Biomarker Scan</Text>
+              <Text style={styles.subtitle}>
+                Real-time facial analysis for neurological cues
               </Text>
-            ) : (
-              <>
-                <Ionicons name="scan" size={22} color="#fff" />
-                <Text style={styles.startText}>Initiate Scan</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        )}
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Face Analysis</Text>
+
+              <View style={styles.faceRow}>
+                <View style={styles.faceLeft}>
+                  <View style={styles.facePreview}>
+                    {isCameraOpen ? (
+                      <CameraView
+                        ref={cameraRef}
+                        style={styles.faceImage}
+                        facing="front"
+                      />
+                    ) : capturedImage ? (
+                      <Image
+                        source={{ uri: capturedImage }}
+                        style={styles.faceImage}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={styles.placeholder}>
+                        <Ionicons
+                          name="person-circle-outline"
+                          size={80}
+                          color="#999"
+                        />
+                        <Text style={styles.placeholderText}>
+                          Scan or upload a face
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={styles.buttonRowLeft}>
+                    <TouchableOpacity
+                      style={[
+                        styles.scanBtn,
+                        isProcessing && styles.disabledBtn,
+                      ]}
+                      onPress={handleScanPress}
+                      disabled={isProcessing}
+                    >
+                      <Ionicons name="camera" size={20} color="#fff" />
+                      <Text style={styles.btnText}>
+                        {isCameraOpen ? "Click Picture" : "Scan"}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.uploadBtn,
+                        isProcessing && styles.disabledBtn,
+                      ]}
+                      onPress={uploadImage}
+                      disabled={isProcessing}
+                    >
+                      <Ionicons name="image" size={20} color="#000" />
+                      <Text style={styles.uploadText}>Upload Image</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.faceInfo}>
+                  <Text style={styles.faceInfoTitle}>Face Analysis Results</Text>
+
+                  <Text style={styles.faceStatus}>
+                    {isProcessing
+                      ? "Analyzing facial biomarkers, please wait a few seconds..."
+                      : scanResult
+                      ? "Analysis complete:"
+                      : "Tap Scan or Upload Image to start an analysis."}
+                  </Text>
+
+                  {insight && !isProcessing && (
+                    <View style={styles.faceInsightBox}>
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={16}
+                        color="#18a558"
+                      />
+                      <Text style={styles.faceInsightText}>{insight}</Text>
+                    </View>
+                  )}
+
+                  {scanResult && !isProcessing && (
+                    <View style={styles.resultsGrid}>
+                      {renderResultCard("Eye", "eye-outline", scanResult.result.eye)}
+                      {renderResultCard(
+                        "Eyebrow",
+                        "analytics-outline",
+                        scanResult.result.eyebrow
+                      )}
+                      {renderResultCard(
+                        "Mouth",
+                        "happy-outline",
+                        scanResult.result.mouth
+                      )}
+                    </View>
+                  )}
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.statusBar}>
+              <Text style={styles.statusText}>{status}</Text>
+            </View>
+          </View>
+        </ScrollView>
       </View>
     </SafeAreaView>
   );
@@ -226,6 +408,49 @@ export default function ScanScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.bg },
+  mainRow: { flex: 1, flexDirection: "row" },
+
+  scrollContent: {
+    flexGrow: 1,
+  },
+
+  sidebar: {
+    width: 96,
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+    backgroundColor: "#111827",
+  },
+  sidebarTitle: {
+    color: "#e5e7eb",
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  navItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  navItemActive: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    marginBottom: 8,
+    backgroundColor: "#4c8dff",
+  },
+  navText: { color: "#e5e7eb", fontSize: 12, fontWeight: "600" },
+  navTextActive: { color: "#ffffff", fontSize: 12, fontWeight: "700" },
+
+  content: { flex: 1 },
+
   header: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 16 },
   title: {
     fontSize: 28,
@@ -235,66 +460,149 @@ const styles = StyleSheet.create({
   },
   subtitle: { marginTop: 4, fontSize: 14, color: theme.textMuted },
 
-  cameraWrap: {
+  card: {
+    backgroundColor: "#fff",
     marginHorizontal: 16,
-    borderRadius: 20,
-    overflow: "hidden",
-    flex: 1,
-    backgroundColor: "#000",
+    marginBottom: 18,
+    borderRadius: 22,
+    padding: 18,
     ...shadow,
   },
-  camera: { flex: 1, width: "100%", height: "100%" },
-  overlay: { ...StyleSheet.absoluteFillObject },
+  cardTitle: { fontSize: 20, fontWeight: "700", color: "#111" },
 
-  laserLine: {
+  faceRow: { flexDirection: "row", marginTop: 20, gap: 16 },
+  faceLeft: { flex: 0.9 },
+  facePreview: {
     width: "100%",
-    height: 4,
-    backgroundColor: theme.primary,
-    shadowColor: theme.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-
-  statusBar: {
-    position: "absolute",
-    bottom: 20,
-    alignSelf: "center",
-    flexDirection: "row",
+    height: 260,
+    borderRadius: 20,
+    overflow: "hidden",
+    backgroundColor: "#f2f2f2",
     alignItems: "center",
-    gap: 10,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 999,
+    justifyContent: "center",
   },
-  statusText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  faceImage: { width: "100%", height: "100%" },
 
-  insightBadge: {
-    position: "absolute",
-    top: 20,
-    alignSelf: "center",
-    backgroundColor: theme.primary,
+  placeholder: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 24,
+  },
+  placeholderText: { marginTop: 8, color: "#777", fontSize: 13 },
+
+  buttonRowLeft: {
+    flexDirection: "row",
+    marginTop: 12,
+    gap: 12,
+  },
+  scanBtn: {
+    flex: 1,
+    backgroundColor: "#4c8dff",
+    height: 44,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  uploadBtn: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#ddd",
+    height: 44,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  disabledBtn: { opacity: 0.6 },
+  btnText: { color: "#fff", fontWeight: "700" },
+  uploadText: { color: "#111", fontWeight: "700" },
+
+  faceInfo: { flex: 1.1, justifyContent: "flex-start" },
+  faceInfoTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111",
+    marginBottom: 8,
+  },
+  faceStatus: { fontSize: 13, color: "#666", marginBottom: 12 },
+  faceInsightBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#e8fff1",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 12,
+  },
+  faceInsightText: { color: "#155c31", fontSize: 13, flexShrink: 1 },
+
+  resultsGrid: {
+    gap: 10,
+  },
+  resultCard: {
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 14,
+    padding: 12,
+  },
+  resultHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 16,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
+    marginBottom: 6,
   },
-  insightText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+  resultLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#334155",
+  },
+  resultPrediction: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  resultConfidence: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#64748b",
+  },
 
-  controls: { padding: 24 },
+  statusBar: {
+    paddingHorizontal: 24,
+    paddingBottom: 16,
+    paddingTop: 4,
+  },
+  statusText: { color: theme.textMuted, fontSize: 13 },
+
+  permWrap: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  permTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: theme.textMain,
+    marginTop: 20,
+  },
+  permText: {
+    textAlign: "center",
+    color: theme.textMuted,
+    marginTop: 10,
+    marginBottom: 30,
+  },
   startBtn: {
     backgroundColor: theme.primary,
     borderRadius: 999,
     paddingVertical: 18,
+    paddingHorizontal: 32,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -302,13 +610,4 @@ const styles = StyleSheet.create({
     ...shadow,
   },
   startText: { color: "#fff", fontSize: 16, fontWeight: "800" },
-
-  permWrap: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
-  permTitle: { fontSize: 20, fontWeight: "700", color: theme.textMain, marginTop: 20 },
-  permText: {
-    textAlign: "center",
-    color: theme.textMuted,
-    marginTop: 10,
-    marginBottom: 30,
-  },
 });
