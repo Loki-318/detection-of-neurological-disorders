@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -12,7 +12,14 @@ function RootLayoutNav() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: theme.bg }}>
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: theme.bg,
+        }}
+      >
         <ActivityIndicator color={theme.primary} size="large" />
       </View>
     );
@@ -27,16 +34,17 @@ function RootLayoutNav() {
       }}
     >
       {user ? (
-        // Authenticated routes
         <>
           <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="result" options={{ animation: "slide_from_bottom" }} />
+          <Stack.Screen
+            name="result"
+            options={{ animation: "slide_from_bottom" }}
+          />
         </>
       ) : (
-        // Unauthenticated routes
         <>
-          <Stack.Screen name="login" />
           <Stack.Screen name="index" />
+          <Stack.Screen name="login" />
         </>
       )}
     </Stack>

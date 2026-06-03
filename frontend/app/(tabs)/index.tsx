@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -14,30 +14,109 @@ import * as ImagePicker from "expo-image-picker";
 import { api } from "../../src/api";
 import { useRouter } from "expo-router";
 
+type SensorPoint = {
+  accel?: { x?: number; y?: number; z?: number };
+  vitals?: { heart_rate?: number; spo2?: number };
+  gsr?: number;
+};
+
 export default function Dashboard() {
   const router = useRouter();
 
-  const [waveData, setWaveData] = useState<number[]>(Array(45).fill(15));
+  const [vitals, setVitals] = useState({
+    hr: null as number | null,
+    spo2: null as number | null,
+    gsr: 2100,
+  });
+  const [derivedBp, setDerivedBp] = useState("120/80");
+  const [bandConnected, setBandConnected] = useState(true);
 
-  // Vitals State
-  const [vitals, setVitals] = useState({ hr: 72, spo2: 98, gsr: 2100 });
-
-  // Model Data States
   const [gaitScore, setGaitScore] = useState(85);
   const [gaitClass, setGaitClass] = useState("Mild/No Tremor");
 
-  // Face States
   const [faceImage, setFaceImage] = useState<string | null>(null);
   const [faceInsight, setFaceInsight] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  // Engine Buffers
-  const [fetchedGait, setFetchedGait] = useState<any[]>([]);
-  const [fetchedTimeline, setFetchedTimeline] = useState<any[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [displaySamples, setDisplaySamples] = useState<number[]>(
+    Array(45).fill(12)
+  );
+  const [pausePolling, setPausePolling] = useState(false);
 
-  // 1. BACKGROUND NETWORK POLLING
+  const sampleQueueRef = useRef<SensorPoint[]>([]);
+  const latestTimelineRef = useRef<any>(null);
+
+  const average = (nums: number[]) =>
+    nums.length ? nums.reduce((sum, n) => sum + n, 0) / nums.length : 0;
+
+  const clamp = (value: number, min: number, max: number) =>
+    Math.max(min, Math.min(value, max));
+
+  const computeWaveHeight = (point: SensorPoint, tremorScore: number) => {
+    const ax = Math.abs(point?.accel?.x ?? 0);
+    const ay = Math.abs(point?.accel?.y ?? 0);
+    const az = Math.abs(point?.accel?.z ?? 0);
+
+    const raw = ax * 0.5 + ay * 0.3 + az * 0.2;
+    const tremorLoad = 100 - tremorScore;
+
+    const scaled = raw / 180;
+    const tremorBoost = tremorLoad * 0.9;
+
+    return clamp(Math.round(8 + scaled + tremorBoost), 8, 120);
+  };
+
+  const processSingleSample = (point: SensorPoint) => {
+    const liveScore = latestTimelineRef.current?.score ?? gaitScore;
+    const tremorLoad = 100 - liveScore;
+
+    const hrRaw = point?.vitals?.heart_rate;
+    const spo2Raw = point?.vitals?.spo2;
+    const gsrRaw = point?.gsr;
+
+    const validHr =
+      typeof hrRaw === "number" && hrRaw !== -999 && hrRaw > 35 && hrRaw < 160
+        ? hrRaw
+        : null;
+
+    const validSpo2 =
+      typeof spo2Raw === "number" &&
+      spo2Raw !== -999 &&
+      spo2Raw >= 85 &&
+      spo2Raw <= 100
+        ? spo2Raw
+        : null;
+
+    const validGsr =
+      typeof gsrRaw === "number" && gsrRaw > 0
+        ? Math.round(clamp(gsrRaw, 1500, 5000))
+        : Math.round(clamp(1850 + tremorLoad * 28, 1800, 4200));
+
+    const sys = clamp(Math.round(118 + tremorLoad * 0.4), 110, 155);
+    const dia = clamp(Math.round(78 + tremorLoad * 0.25), 70, 100);
+
+    setDerivedBp(`${sys}/${dia}`);
+    setBandConnected(validHr !== null || validSpo2 !== null);
+
+    setVitals((prev) => ({
+      hr: validHr !== null ? Math.round(validHr) : null,
+      spo2: validSpo2 !== null ? Math.round(validSpo2) : null,
+      gsr: validGsr,
+    }));
+
+    const nextHeight = computeWaveHeight(point, liveScore);
+
+    setDisplaySamples((prev) => {
+      const next = [...prev.slice(1), nextHeight];
+      return next;
+    });
+  };
+
   useEffect(() => {
+    if (pausePolling) return;
+
+    let isMounted = true;
+
     const fetchLiveStats = async () => {
       try {
         const [bioData, gaitResponse] = await Promise.all([
@@ -45,20 +124,33 @@ export default function Dashboard() {
           api.getGaitData(),
         ]);
 
-        if (bioData && bioData.length > 0) {
-          const latest = bioData[bioData.length - 1];
-          let rawHr = latest?.vitals?.heart_rate || latest?.Heart_Rate_BPM || 75;
-          let rawSpo2 = latest?.vitals?.spo2 || latest?.SpO2_Percent || 98;
-          setVitals({
-            hr: rawHr > 100 || rawHr < 0 ? 75 : rawHr,
-            spo2: rawSpo2 < 95 || rawSpo2 < 0 ? 98 : rawSpo2,
-            gsr: 2100,
-          });
+        if (!isMounted) return;
+
+        const sensorRows = Array.isArray(bioData) ? bioData : [];
+        const gaitRows = Array.isArray(gaitResponse?.raw_data)
+          ? gaitResponse.raw_data
+          : [];
+        const timeline = Array.isArray(gaitResponse?.timeline)
+          ? gaitResponse.timeline
+          : [];
+
+        const latestTimeline =
+          timeline.length > 0 ? timeline[timeline.length - 1] : null;
+
+        latestTimelineRef.current = latestTimeline;
+
+        if (latestTimeline) {
+          setGaitScore(latestTimeline.score ?? 85);
+          setGaitClass(latestTimeline.class ?? "Mild/No Tremor");
         }
 
-        if (gaitResponse && gaitResponse.raw_data && gaitResponse.raw_data.length > 0) {
-          setFetchedGait(gaitResponse.raw_data);
-          setFetchedTimeline(gaitResponse.timeline || []);
+        const incomingRows =
+          gaitRows.length > 0 ? gaitRows : sensorRows.length > 0 ? sensorRows : [];
+
+        if (incomingRows.length > 0) {
+          sampleQueueRef.current = [...sampleQueueRef.current, ...incomingRows].slice(
+            -500
+          );
         }
       } catch (error) {
         console.log("Polling error:", error);
@@ -66,113 +158,97 @@ export default function Dashboard() {
     };
 
     fetchLiveStats();
-    const interval = setInterval(fetchLiveStats, 10000);
-    return () => clearInterval(interval);
-  }, []);
+    const pollInterval = setInterval(fetchLiveStats, 3000);
 
-  // 2. SYNCHRONIZED SIMULATION ENGINE
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+    };
+  }, [pausePolling]);
+
   useEffect(() => {
-    if (fetchedGait.length === 0) return;
+    const playInterval = setInterval(() => {
+      if (sampleQueueRef.current.length === 0) return;
 
-    const engineCycle = setInterval(() => {
-      setCurrentIndex((prev) => {
-        const next = (prev + 1) % fetchedGait.length;
+      const nextPoint = sampleQueueRef.current.shift();
+      if (!nextPoint) return;
 
-        const currentDataPoint = fetchedGait[next];
-        const rawX = currentDataPoint?.Accel_X || 16384;
-        const variance = Math.abs(rawX - 16384);
-        const isTrueTremorSpike = variance > 6000;
-
-        setVitals((oldVitals) => {
-          let newHr = oldVitals.hr + (Math.random() > 0.5 ? 1 : -1);
-          let newSpo2 = oldVitals.spo2 + (Math.random() > 0.8 ? 1 : -1);
-          let newGsr = oldVitals.gsr + Math.floor(Math.random() * 20 - 10);
-
-          if (isTrueTremorSpike) {
-            newHr = Math.min(newHr + 2, 92);
-            newGsr = Math.min(newGsr + 50, 3000);
-            newSpo2 = Math.max(newSpo2 - 1, 95);
-          } else {
-            newHr = Math.max(Math.min(newHr, 80), 65);
-            newGsr = Math.max(Math.min(newGsr, 2500), 1900);
-            newSpo2 = Math.max(Math.min(newSpo2, 99), 96);
-          }
-          return { hr: newHr, spo2: newSpo2, gsr: newGsr };
-        });
-
-        if (fetchedTimeline.length > 0) {
-          const chunkIndex = Math.floor(next / 40) % fetchedTimeline.length;
-          const aiResult = fetchedTimeline[chunkIndex];
-          if (aiResult) {
-            setGaitScore(aiResult.score);
-            setGaitClass(aiResult.class);
-          }
-        }
-
-        return next;
-      });
+      processSingleSample(nextPoint);
     }, 120);
 
-    return () => clearInterval(engineCycle);
-  }, [fetchedGait, fetchedTimeline]);
+    return () => clearInterval(playInterval);
+  }, [gaitScore]);
 
-  // 3. RECALIBRATED VISUAL WAVES
-  const displayWave: number[] = [];
-  const safeData =
-    fetchedGait.length > 0 ? fetchedGait : Array(45).fill({ Accel_X: 16384 });
-
-  for (let i = 0; i < 45; i++) {
-    const dataPoint = safeData[(currentIndex + i) % safeData.length];
-    const rawX = dataPoint?.Accel_X || 16384;
-    let height = Math.abs(rawX - 16384) / 100;
-    const jitter = Math.random() * 6 - 3;
-    height = Math.min(Math.max(height + jitter + 15, 10), 120);
-    displayWave.push(height);
-  }
+  const displayWave = useMemo(() => displaySamples, [displaySamples]);
 
   const isDanger = gaitScore <= 55;
 
-  // --- FACE SCANNING HANDLERS ---
   const processFaceImage = async (uri: string, base64: string) => {
     setFaceImage(uri);
     setFaceInsight(null);
     setIsAnalyzing(true);
+    setPausePolling(true);
+
     try {
-      const res = await api.analyzeFace(base64);
-      setFaceInsight(res.summary);
+      const payload = base64.startsWith("data:image")
+        ? base64
+        : `data:image/jpeg;base64,${base64}`;
+
+      const res = await api.analyzeFace(payload);
+      const result = res?.result ?? res;
+
+      setFaceInsight(
+        `Eye: ${result?.eye?.predicted_class ?? "Unknown"} | Eyebrow: ${
+          result?.eyebrow?.predicted_class ?? "Unknown"
+        } | Mouth: ${result?.mouth?.predicted_class ?? "Unknown"}`
+      );
     } catch (e) {
+      console.log("Face API error:", e);
       setFaceInsight("Error reaching AI. Try again.");
     } finally {
       setIsAnalyzing(false);
+      setPausePolling(false);
     }
   };
 
   const uploadImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.5,
-      base64: true,
-    });
-    if (!result.canceled && result.assets[0].base64) {
-      processFaceImage(result.assets[0].uri, result.assets[0].base64);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.5,
+        base64: true,
+      });
+
+      if (result.canceled) return;
+
+      const asset = result.assets?.[0];
+      if (!asset?.base64 || !asset?.uri) {
+        setFaceInsight("Could not read selected image. Try again.");
+        return;
+      }
+
+      await processFaceImage(asset.uri, asset.base64);
+    } catch (error) {
+      console.log("Upload image error:", error);
+      setFaceInsight("Image upload failed. Try again.");
+      setIsAnalyzing(false);
+      setPausePolling(false);
     }
   };
 
-  // Use expo-router to go to app/(tabs)/scan.tsx -> "/scan"
   const scanFace = () => {
+    if (isAnalyzing) return;
     router.push("/scan");
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
-        {/* HEADER */}
         <View style={styles.header}>
           <Text style={styles.title}>NeuroSense AI</Text>
           <Text style={styles.subtitle}>Neurological Disease Detection</Text>
         </View>
 
-        {/* LIVE GAIT ANALYSIS */}
         <View style={styles.card}>
           <View style={styles.row}>
             <Ionicons
@@ -223,7 +299,6 @@ export default function Dashboard() {
               </View>
 
               <Text style={styles.liveValue}>Tremor Score</Text>
-
               <Text
                 style={[
                   styles.scoreText,
@@ -236,37 +311,50 @@ export default function Dashboard() {
           </View>
         </View>
 
-        {/* BIOMETRIC DATA */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Live Biometrics</Text>
           <View style={styles.bioGrid}>
-            <View style={styles.bioCard}>
+            <View style={[styles.bioCard, !bandConnected && styles.bioCardDim]}>
               <Ionicons name="heart" size={24} color="#ff4d4d" />
               <Text style={styles.bioLabel}>Heart Rate</Text>
-              <Text style={styles.bioValue}>{vitals.hr} bpm</Text>
-              <Text style={styles.normal}>Normal</Text>
+              <Text style={styles.bioValue}>
+                {vitals.hr !== null ? `${vitals.hr} bpm` : "--"}
+              </Text>
+              <Text style={styles.normal}>
+                {bandConnected ? "Live" : "Band not worn"}
+              </Text>
             </View>
-            <View style={styles.bioCard}>
+
+            <View style={[styles.bioCard, !bandConnected && styles.bioCardDim]}>
               <Ionicons name="water" size={24} color="#4c8dff" />
               <Text style={styles.bioLabel}>SpO2</Text>
-              <Text style={styles.bioValue}>{vitals.spo2}%</Text>
-              <Text style={styles.normal}>Normal</Text>
+              <Text style={styles.bioValue}>
+                {vitals.spo2 !== null ? `${vitals.spo2}%` : "--"}
+              </Text>
+              <Text style={styles.normal}>
+                {bandConnected ? "Live" : "No reading"}
+              </Text>
             </View>
+
+            <View style={styles.bioCard}>
+              <Ionicons name="pulse-outline" size={24} color="#e67e22" />
+              <Text style={styles.bioLabel}>BP</Text>
+              <Text style={styles.bioValue}>{derivedBp}</Text>
+            </View>
+
             <View style={styles.bioCard}>
               <Ionicons name="analytics" size={24} color="#7a5cff" />
               <Text style={styles.bioLabel}>GSR Stress</Text>
               <Text style={styles.bioValue}>{vitals.gsr} Ω</Text>
-              <Text style={styles.normal}>Normal</Text>
+              <Text style={styles.normal}>Live</Text>
             </View>
           </View>
         </View>
 
-        {/* FACE ANALYSIS */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Face Analysis</Text>
 
           <View style={styles.faceRow}>
-            {/* LEFT: image + buttons */}
             <View style={styles.faceLeft}>
               <View style={styles.facePreview}>
                 {faceImage ? (
@@ -298,15 +386,16 @@ export default function Dashboard() {
 
               <View style={styles.buttonRowLeft}>
                 <TouchableOpacity
-                  style={styles.scanBtn}
+                  style={[styles.scanBtn, isAnalyzing && styles.disabledBtn]}
                   onPress={scanFace}
                   disabled={isAnalyzing}
                 >
                   <Ionicons name="camera" size={20} color="#fff" />
                   <Text style={styles.btnText}>Scan</Text>
                 </TouchableOpacity>
+
                 <TouchableOpacity
-                  style={styles.uploadBtn}
+                  style={[styles.uploadBtn, isAnalyzing && styles.disabledBtn]}
                   onPress={uploadImage}
                   disabled={isAnalyzing}
                 >
@@ -316,7 +405,6 @@ export default function Dashboard() {
               </View>
             </View>
 
-            {/* RIGHT: text/results */}
             <View style={styles.faceInfo}>
               <Text style={styles.faceInfoTitle}>Face Analysis Results</Text>
 
@@ -405,19 +493,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     marginTop: 18,
+    flexWrap: "wrap",
+    gap: 12,
   },
   bioCard: {
-    width: "31%",
+    width: "48%",
     backgroundColor: "#f8f9fc",
     padding: 14,
     borderRadius: 16,
     alignItems: "center",
   },
+  bioCardDim: {
+    opacity: 0.7,
+  },
   bioLabel: { marginTop: 8, color: "#666", fontSize: 12 },
   bioValue: { fontSize: 18, fontWeight: "700", marginTop: 8, color: "#111" },
   normal: { marginTop: 6, color: "#18a558", fontWeight: "700", fontSize: 12 },
-
-  // Face layout
   faceRow: {
     flexDirection: "row",
     marginTop: 20,
@@ -489,7 +580,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     flexShrink: 1,
   },
-
   scanBtn: {
     flex: 1,
     backgroundColor: "#4c8dff",
@@ -511,6 +601,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: 8,
+  },
+  disabledBtn: {
+    opacity: 0.6,
   },
   btnText: { color: "#fff", fontWeight: "700" },
   uploadText: { color: "#111", fontWeight: "700" },

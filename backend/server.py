@@ -1,87 +1,106 @@
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from pathlib import Path
-
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / ".env")
-
+from typing import Optional
+from datetime import datetime, timezone, timedelta
 import os
 import uuid
 import logging
+import base64
+import time
+import asyncio
+from io import BytesIO
+
 import bcrypt
 import jwt as pyjwt
-from datetime import datetime, timezone, timedelta
-from typing import Optional
-import tempfile  # for temp image files
-
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, EmailStr, Field
 import certifi
-
-# --- TRADITIONAL ML IMPORTS (QSVM ONLY) ---
-import joblib
 import pandas as pd
 import numpy as np
+import joblib
 from scipy.signal import butter, filtfilt
 
-# --- FACE MODELS (ResNet / HF Space) ---
-import base64
-from io import BytesIO
-from PIL import Image
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 import torchvision.models as models
-from gradio_client import Client, handle_file  # HF Space client
+from PIL import Image, UnidentifiedImageError
+from google.cloud import storage
 
-# ---------------------------------------------------------------------------
-# Config / DB
-# ---------------------------------------------------------------------------
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, EmailStr, Field
+
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / ".env")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+logger = logging.getLogger("neuroscan")
+
 mongo_url = os.environ["MONGO_URL"]
-
-client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
-db = client[os.environ["DB_NAME"]]
+db_name = os.environ["DB_NAME"]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGO = "HS256"
 
-app = FastAPI(title="NeuroScan AI")
+GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
+EYE_MODEL_BLOB = os.environ.get("EYE_MODEL_BLOB", "models/eye/best_eye_model.pth")
+EYEBROW_MODEL_BLOB = os.environ.get("EYEBROW_MODEL_BLOB", "models/eyebrow/best_eyebrow_model.pth")
+MOUTH_MODEL_BLOB = os.environ.get("MOUTH_MODEL_BLOB", "models/mouth/best_mouth_model.pth")
+
+PORT = int(os.environ.get("PORT", "8080"))
+
+logger.info("Initializing MongoDB client")
+client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
+db = client[db_name]
+
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("neuroscan")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+IMG_SIZE = 224
+MODEL_CACHE_DIR = ROOT_DIR / "model_cache"
+MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- GLOBAL ML MODELS ---
+if DEVICE.type == "cpu":
+    torch.set_num_threads(int(os.environ.get("TORCH_NUM_THREADS", "2")))
+    torch.set_num_interop_threads(int(os.environ.get("TORCH_INTEROP_THREADS", "1")))
+
+logger.info(f"Runtime device selected: {DEVICE}")
+logger.info(f"Model cache dir: {MODEL_CACHE_DIR}")
+logger.info(f"TORCH_NUM_THREADS={torch.get_num_threads()}")
+logger.info(f"TORCH_INTEROP_THREADS={torch.get_num_interop_threads()}")
+
 scaler = None
 pca = None
 qsvm_model = None
+models_loaded = False
 
-# Face models (kept for compatibility, but inference now uses HF Space)
 eye_model = None
+eyebrow_model = None
 mouth_model = None
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+face_models_loaded = False
 
-IMG_SIZE = 224
-eval_transform = transforms.Compose(
-    [
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.Grayscale(num_output_channels=3),
-        transforms.ToTensor(),
-    ]
-)
+face_model_lock = asyncio.Lock()
+face_inference_semaphore = asyncio.Semaphore(1)
+gait_semaphore = asyncio.Semaphore(1)
 
 EYE_CLASSES = ["Mild eye", "Moderate eye", "Moderate severe eye", "Severe eye"]
+EYEBROW_CLASSES = ["Mild eyebrow", "Moderate eyebrow", "Moderate severe eyebrow", "Severe eyebrow"]
 MOUTH_CLASSES = ["Mild mouth", "Moderate mouth", "Moderate severe mouth", "Severe mouth"]
 
-# Hugging Face Space id (Gradio app)
-HF_SPACE_ID = "Nihar3006/neuroscan-facial-ai"
-hf_client = None
+eval_transform = transforms.Compose([
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.Grayscale(num_output_channels=3),
+    transforms.ToTensor(),
+])
 
-# ---------------------------------------------------------------------------
-# Feature Extraction (Physics & Math)
-# ---------------------------------------------------------------------------
+
 def apply_bandpass_filter(data_array, fs=13.3, lowcut=3.0, highcut=6.0):
     if len(data_array) < 15:
         return data_array
@@ -93,170 +112,202 @@ def apply_bandpass_filter(data_array, fs=13.3, lowcut=3.0, highcut=6.0):
 
 
 def extract_6axis_features(raw_mongo_window: list) -> pd.DataFrame:
-    df = pd.json_normalize(raw_mongo_window)
+    rows = []
 
-    # Mapped exactly to your 'newdata' collection schema
-    for col in ["Accel_X", "Accel_Y", "Accel_Z", "Gyro_X", "Gyro_Y", "Gyro_Z"]:
-        if col not in df.columns:
-            df[col] = 0.0
+    for item in raw_mongo_window:
+        accel = item.get("accel", {}) or {}
+        gyro = item.get("gyro", {}) or {}
+
+        rows.append({
+            "Accel_X": float(accel.get("x", 0.0)),
+            "Accel_Y": float(accel.get("y", 0.0)),
+            "Accel_Z": float(accel.get("z", 0.0)),
+            "Gyro_X": float(gyro.get("x", 0.0)),
+            "Gyro_Y": float(gyro.get("y", 0.0)),
+            "Gyro_Z": float(gyro.get("z", 0.0)),
+        })
+
+    df = pd.DataFrame(rows)
+
+    if df.empty:
+        df = pd.DataFrame([{
+            "Accel_X": 0.0,
+            "Accel_Y": 0.0,
+            "Accel_Z": 0.0,
+            "Gyro_X": 0.0,
+            "Gyro_Y": 0.0,
+            "Gyro_Z": 0.0,
+        }])
 
     acc_x_g = df["Accel_X"] / 16384.0
     acc_y_g = df["Accel_Y"] / 16384.0
     acc_z_g = df["Accel_Z"] / 16384.0
-
     gyr_x_dps = df["Gyro_X"] / 131.0
     gyr_y_dps = df["Gyro_Y"] / 131.0
     gyr_z_dps = df["Gyro_Z"] / 131.0
 
-    filtered_acc_x = apply_bandpass_filter(acc_x_g)
-    filtered_acc_y = apply_bandpass_filter(acc_y_g)
-    filtered_acc_z = apply_bandpass_filter(acc_z_g)
-    filtered_gyr_x = apply_bandpass_filter(gyr_x_dps)
-    filtered_gyr_y = apply_bandpass_filter(gyr_y_dps)
-    filtered_gyr_z = apply_bandpass_filter(gyr_z_dps)
+    filtered_acc_x = apply_bandpass_filter(acc_x_g.to_numpy())
+    filtered_acc_y = apply_bandpass_filter(acc_y_g.to_numpy())
+    filtered_acc_z = apply_bandpass_filter(acc_z_g.to_numpy())
+    filtered_gyr_x = apply_bandpass_filter(gyr_x_dps.to_numpy())
+    filtered_gyr_y = apply_bandpass_filter(gyr_y_dps.to_numpy())
+    filtered_gyr_z = apply_bandpass_filter(gyr_z_dps.to_numpy())
 
-    return pd.DataFrame(
-        [
-            {
-                "xAcc": np.var(filtered_acc_x),
-                "yAcc": np.var(filtered_acc_y),
-                "zAcc": np.var(filtered_acc_z),
-                "xGyro": np.sum(filtered_gyr_x ** 2) / len(df),
-                "yGyro": np.sum(filtered_gyr_y ** 2) / len(df),
-                "zGyro": np.sum(filtered_gyr_z ** 2) / len(df),
-            }
-        ]
-    )
+    return pd.DataFrame([{
+        "xAcc": float(np.var(filtered_acc_x)),
+        "yAcc": float(np.var(filtered_acc_y)),
+        "zAcc": float(np.var(filtered_acc_z)),
+        "xGyro": float(np.sum(filtered_gyr_x ** 2) / len(df)),
+        "yGyro": float(np.sum(filtered_gyr_y ** 2) / len(df)),
+        "zGyro": float(np.sum(filtered_gyr_z ** 2) / len(df)),
+    }])
 
-# ---------------------------------------------------------------------------
-# Face model helpers (now using HF Space as backend)
-# ---------------------------------------------------------------------------
-def build_resnet50(num_classes: int) -> nn.Module:
-    # Kept for compatibility; not used when calling HF Space
-    model = models.resnet50(weights=None)
+
+def load_qsvm_models():
+    global scaler, pca, qsvm_model, models_loaded
+    if models_loaded:
+        logger.info("QSVM models already loaded, skipping")
+        return
+
+    model_dir = ROOT_DIR / "models"
+    logger.info(f"Loading QSVM models from {model_dir}")
+
+    scaler_path = model_dir / "live_qsvm_scaler.pkl"
+    pca_path = model_dir / "live_qsvm_pca.pkl"
+    qsvm_path = model_dir / "live_qsvm_model.pkl"
+
+    logger.info(f"Loading scaler from {scaler_path}")
+    scaler = joblib.load(scaler_path)
+
+    logger.info(f"Loading PCA from {pca_path}")
+    pca = joblib.load(pca_path)
+
+    logger.info(f"Loading QSVM model from {qsvm_path}")
+    qsvm_model = joblib.load(qsvm_path)
+
+    models_loaded = True
+    logger.info("QSVM models loaded successfully")
+
+
+def build_resnet18(num_classes: int) -> nn.Module:
+    model = models.resnet18(weights=None)
     in_features = model.fc.in_features
     model.fc = nn.Sequential(
-        nn.Dropout(p=0.3),
-        nn.Linear(in_features, num_classes),
+        nn.Linear(in_features, 256),
+        nn.ReLU(),
+        nn.Dropout(0.4),
+        nn.Linear(256, num_classes),
     )
     return model
 
 
-def load_face_models() -> bool:
-    """
-    Initialize a client to the Hugging Face Space instead of downloading .pth files.
-    """
-    global hf_client
+def download_blob_if_missing(bucket_name: str, blob_name: str, local_path: Path):
+    if local_path.exists():
+        logger.info(f"Using cached model file: {local_path}")
+        return
 
-    try:
-        logger.info(f"Initializing Hugging Face Space client for {HF_SPACE_ID}")
-        hf_client = Client(HF_SPACE_ID)
-        logger.info(f"Connected to Hugging Face Space: {HF_SPACE_ID}")
-        # Optional: inspect API once at startup
-        try:
-            api_info = hf_client.view_api()
-            logger.info(f"HF Space API schema: {api_info}")
-        except Exception:
-            logger.warning("Could not fetch HF Space API schema via view_api()")
-        return True
-    except Exception:
-        logger.exception("Failed to initialize Hugging Face Space client")
-        hf_client = None
-        return False
+    logger.info(f"Downloading from gs://{bucket_name}/{blob_name} to {local_path}")
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    blob.download_to_filename(str(local_path))
+    logger.info(f"Downloaded blob successfully: {local_path.name}")
 
 
-def decode_base64_image(b64: str) -> Image.Image:
+def load_face_models_sync():
+    global eye_model, eyebrow_model, mouth_model, face_models_loaded
+
+    if face_models_loaded:
+        logger.info("Face models already loaded, skipping")
+        return
+
+    if not GCS_BUCKET:
+        logger.error("GCS_BUCKET not set")
+        raise RuntimeError("GCS_BUCKET not set")
+
+    logger.info("Starting face model load sequence")
+
+    eye_path = MODEL_CACHE_DIR / "best_eye_model.pth"
+    eyebrow_path = MODEL_CACHE_DIR / "best_eyebrow_model.pth"
+    mouth_path = MODEL_CACHE_DIR / "best_mouth_model.pth"
+
+    download_blob_if_missing(GCS_BUCKET, EYE_MODEL_BLOB, eye_path)
+    download_blob_if_missing(GCS_BUCKET, EYEBROW_MODEL_BLOB, eyebrow_path)
+    download_blob_if_missing(GCS_BUCKET, MOUTH_MODEL_BLOB, mouth_path)
+
+    logger.info("Building eye model")
+    eye_model_local = build_resnet18(len(EYE_CLASSES))
+    logger.info("Loading eye weights")
+    eye_model_local.load_state_dict(torch.load(eye_path, map_location=DEVICE))
+    eye_model_local.to(DEVICE).eval()
+
+    logger.info("Building eyebrow model")
+    eyebrow_model_local = build_resnet18(len(EYEBROW_CLASSES))
+    logger.info("Loading eyebrow weights")
+    eyebrow_model_local.load_state_dict(torch.load(eyebrow_path, map_location=DEVICE))
+    eyebrow_model_local.to(DEVICE).eval()
+
+    logger.info("Building mouth model")
+    mouth_model_local = build_resnet18(len(MOUTH_CLASSES))
+    logger.info("Loading mouth weights")
+    mouth_model_local.load_state_dict(torch.load(mouth_path, map_location=DEVICE))
+    mouth_model_local.to(DEVICE).eval()
+
+    eye_model = eye_model_local
+    eyebrow_model = eyebrow_model_local
+    mouth_model = mouth_model_local
+    face_models_loaded = True
+    logger.info("Face models loaded successfully")
+
+
+async def ensure_face_models_loaded():
+    global face_models_loaded
+    if face_models_loaded:
+        return
+
+    async with face_model_lock:
+        if face_models_loaded:
+            return
+        logger.info("ensure_face_models_loaded: loading face models now")
+        await run_in_threadpool(load_face_models_sync)
+        logger.info("ensure_face_models_loaded: face models ready")
+
+
+def decode_base64_image(b64: str):
+    logger.info("decode_base64_image called")
+
     if not b64:
-        raise ValueError("Empty image payload")
+        logger.error("Empty image payload received")
+        raise HTTPException(status_code=400, detail="Empty image payload")
 
     if b64.startswith("data:image"):
+        logger.info("Detected data URL prefix, stripping metadata")
         b64 = b64.split(",", 1)[1]
 
     b64 = b64.strip().replace("\n", "").replace("\r", "").replace(" ", "")
-
     missing_padding = len(b64) % 4
     if missing_padding:
         b64 += "=" * (4 - missing_padding)
 
-    data = base64.b64decode(b64)
-    return Image.open(BytesIO(data)).convert("RGB")
-
-
-@torch.no_grad()
-def run_face_models(image: Image.Image):
-    """
-    Send the image to the Hugging Face Space and return its raw prediction
-    (dict or string, depending on the Space).
-    """
-    if hf_client is None:
-        raise RuntimeError("Hugging Face Space client is not initialized")
-
-    # Save image to a temporary PNG file (handle_file needs a path or URL)
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        image.save(tmp, format="PNG")
-        tmp_path = tmp.name
-
-    logger.info(f"Sending image to HF Space for prediction: {tmp_path}")
     try:
-        # api_name must match the Space "Use via API" snippet
-        result = hf_client.predict(
-            image=handle_file(tmp_path),
-            api_name="/predict_severity",  # from your HF example
-        )
-        logger.info(f"HF Space prediction raw result: {result}")
+        data = base64.b64decode(b64)
     except Exception:
-        logger.exception("Hugging Face Space inference failed")
-        raise RuntimeError("Hugging Face Space inference failed")
-    finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            logger.warning(f"Failed to delete temp image file: {tmp_path}")
+        logger.exception("Base64 decode failed")
+        raise HTTPException(status_code=400, detail="Invalid base64 image data")
 
-    # IMPORTANT: return the raw result (often a dict), not str(...)
-    return result
+    logger.info(f"Base64 decoded successfully bytes={len(data)}")
 
-
-def build_face_summary(result) -> str:
-    """
-    Turn the HF Space result into a concise, human-readable summary.
-    Expects a dict like:
-    {
-      "Eye paralysis": {"predicted_class": "...", "class_probs": {...}},
-      "Mouth paralysis": {"predicted_class": "...", "class_probs": {...}}
-    }
-    """
     try:
-        if isinstance(result, dict):
-            eye_info = result.get("Eye paralysis", {}) or {}
-            mouth_info = result.get("Mouth paralysis", {}) or {}
+        image = Image.open(BytesIO(data)).convert("RGB")
+        logger.info(f"Image decoded successfully size={image.size} mode={image.mode}")
+        return image
+    except (UnidentifiedImageError, OSError):
+        logger.exception("Image open failed")
+        raise HTTPException(status_code=400, detail="Invalid or truncated image file")
 
-            eye_class = eye_info.get("predicted_class", "Unknown eye")
-            mouth_class = mouth_info.get("predicted_class", "Unknown mouth")
 
-            def top_prob_str(probs: dict):
-                if not isinstance(probs, dict) or not probs:
-                    return ""
-                label, val = max(probs.items(), key=lambda kv: kv[1])
-                return f" (highest confidence: {label} {val:.1%})"
-
-            eye_probs = eye_info.get("class_probs") or {}
-            mouth_probs = mouth_info.get("class_probs") or {}
-
-            eye_extra = top_prob_str(eye_probs)
-            mouth_extra = top_prob_str(mouth_probs)
-
-            return f"Eye: {eye_class}{eye_extra} | Mouth: {mouth_class}{mouth_extra}"
-        else:
-            # Fallback if Space changes its schema
-            return str(result)
-    except Exception:
-        logger.exception("Failed to format face summary from HF result")
-        return str(result)
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
@@ -266,6 +317,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(user_id: str, email: str) -> str:
+    logger.info(f"Creating access token for user_id={user_id} email={email}")
     payload = {
         "sub": user_id,
         "email": email,
@@ -280,32 +332,36 @@ async def get_current_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> dict:
     token = None
+
     if creds and creds.credentials:
         token = creds.credentials
+
     if not token:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:]
+
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
     try:
         payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+
         if payload.get("type") != "access":
             raise HTTPException(status_code=401, detail="Invalid token type")
-        user = await db.users.find_one(
-            {"id": payload["sub"]}, {"_id": 0, "password_hash": 0}
-        )
+
+        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
+
         return user
+
     except pyjwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except pyjwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
+
 class RegisterIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
@@ -334,15 +390,17 @@ class ScanIn(BaseModel):
 class FaceScanIn(BaseModel):
     image: str
 
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
+
 @api_router.post("/auth/register", response_model=AuthOut)
 async def register(body: RegisterIn):
+    logger.info(f"Register attempt email={body.email.lower()}")
     email = body.email.lower()
+
     existing = await db.users.find_one({"email": email})
     if existing:
+        logger.warning(f"Register failed, email already registered email={email}")
         raise HTTPException(status_code=400, detail="Email already registered")
+
     user_id = str(uuid.uuid4())
     doc = {
         "id": user_id,
@@ -351,179 +409,309 @@ async def register(body: RegisterIn):
         "password_hash": hash_password(body.password),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+
     await db.users.insert_one(doc)
     token = create_access_token(user_id, email)
+    logger.info(f"Register success user_id={user_id} email={email}")
+
     return {"token": token, "user": {"id": user_id, "email": email, "name": body.name}}
 
 
 @api_router.post("/auth/login", response_model=AuthOut)
 async def login(body: LoginIn):
+    logger.info(f"Login attempt email={body.email.lower()}")
     email = body.email.lower()
+
     user = await db.users.find_one({"email": email})
-    if not user or not verify_password(body.password, user["password_hash"]):
+    if not user:
+        logger.warning(f"Login failed, user not found email={email}")
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not verify_password(body.password, user["password_hash"]):
+        logger.warning(f"Login failed, invalid password email={email}")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
     token = create_access_token(user["id"], email)
-    return {
-        "token": token,
-        "user": {"id": user["id"], "email": user["email"], "name": user["name"]},
-    }
+    logger.info(f"Login success user_id={user['id']} email={email}")
+
+    return {"token": token, "user": {"id": user["id"], "email": user["email"], "name": user["name"]}}
 
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     return user
 
-# ---------------------------------------------------------------------------
-# Full gait dataset processing
-# ---------------------------------------------------------------------------
+
 @api_router.get("/gait-data")
 async def get_gait_data(user: dict = Depends(get_current_user)):
-    try:
-        hardware_db = client["WearableProject"]
+    started = time.time()
+    async with gait_semaphore:
+        try:
+            hardware_db = client["WearableProject"]
+            collection = hardware_db.LiveHumanData
 
-        # PULL THE ENTIRE DATASET (Up to 2000 rows to ensure we get everything)
-        cursor = hardware_db.newdata.find({}, {"_id": 0}).sort("Timestamp", 1)
-        all_data = await cursor.to_list(length=2000)
+            latest_data = await collection.find(
+                {},
+                {"_id": 0}
+            ).sort("timestamp", -1).limit(120).to_list(length=120)
 
-        # If empty, return safe default
-        if len(all_data) < 40:
-            return {
-                "raw_data": all_data,
-                "timeline": [{"score": 85, "class": "Mild/No Tremor"}],
-            }
+            latest_data.reverse()
 
-        timeline = []
-        window_size = 40
+            if len(latest_data) < 40:
+                logger.info(f"/gait-data fallback user_id={user['id']} records={len(latest_data)}")
+                return {
+                    "raw_data": latest_data,
+                    "timeline": [{"score": 85, "class": "Mild/No Tremor"}],
+                }
 
-        # SLICE INTO CHUNKS & EVALUATE THE ENTIRE TIMELINE
-        for i in range(0, len(all_data) - window_size + 1, window_size):
-            window = all_data[i : i + window_size]
-            gait_score = 85
-            qsvm_class = "Mild/No Tremor"
-
-            if scaler and pca and qsvm_model:
+            if not models_loaded:
                 try:
-                    features_df = extract_6axis_features(window)
-                    live_scaled = scaler.transform(features_df)
-                    live_pca = pca.transform(live_scaled)
-                    prediction = str(qsvm_model.predict(live_pca)[0])
-
-                    if prediction == "3":
-                        gait_score = 30
-                        qsvm_class = "Severe Tremor"
-                    elif prediction == "2":
-                        gait_score = 55
-                        qsvm_class = "Moderate Tremor"
-                    elif prediction == "1":
-                        gait_score = 85
-                        qsvm_class = "Mild/No Tremor"
+                    await run_in_threadpool(load_qsvm_models)
                 except Exception:
-                    logger.exception("Error in QSVM prediction for gait window")
-                    pass
+                    logger.exception("QSVM load failed; using fallback timeline")
 
-            # Save the AI result for this specific chunk
-            timeline.append(
-                {
+            timeline = []
+            window_size = 40
+
+            for i in range(0, len(latest_data) - window_size + 1, window_size):
+                window = latest_data[i:i + window_size]
+                gait_score = 85
+                qsvm_class = "Mild/No Tremor"
+
+                if models_loaded:
+                    try:
+                        features_df = await run_in_threadpool(extract_6axis_features, window)
+                        live_scaled = scaler.transform(features_df)
+                        live_pca = pca.transform(live_scaled)
+                        prediction = str(qsvm_model.predict(live_pca)[0])
+
+                        if prediction == "3":
+                            gait_score = 30
+                            qsvm_class = "Severe Tremor"
+                        elif prediction == "2":
+                            gait_score = 55
+                            qsvm_class = "Moderate Tremor"
+                        else:
+                            gait_score = 85
+                            qsvm_class = "Mild/No Tremor"
+                    except Exception:
+                        logger.exception(f"Error in QSVM prediction for gait window start_index={i}")
+
+                timeline.append({
                     "score": gait_score,
                     "class": qsvm_class,
-                }
+                })
+
+            logger.info(
+                f"/gait-data completed user_id={user['id']} "
+                f"records={len(latest_data)} timeline_count={len(timeline)} "
+                f"duration_ms={round((time.time()-started)*1000, 2)}"
             )
 
-        return {
-            "raw_data": all_data,  # Full dataset for the flowing graph
-            "timeline": timeline,  # Array of AI scores corresponding to the chunks
-        }
-    except Exception:
-        logger.exception("Bulk QSVM error")
-        return {"raw_data": [], "timeline": []}
+            return {
+                "raw_data": latest_data,
+                "timeline": timeline,
+            }
+
+        except Exception:
+            logger.exception("Bulk QSVM error")
+            return {"raw_data": [], "timeline": []}
 
 
 @api_router.get("/sensor-data")
 async def get_raw_sensor_data(user: dict = Depends(get_current_user)):
     try:
         hardware_db = client["WearableProject"]
-        cursor = (
-            hardware_db.LiveHumanData.find({}, {"_id": 0})
-            .sort("timestamp", 1)
-            .limit(50)
-        )
-        data = await cursor.to_list(length=50)
+        collection = hardware_db.LiveHumanData
+
+        data = await collection.find(
+            {},
+            {"_id": 0}
+        ).sort("timestamp", -1).limit(50).to_list(length=50)
+
+        data.reverse()
+
+        logger.info(f"/sensor-data completed user_id={user['id']} records={len(data)}")
         return data
+
     except Exception:
-        logger.exception("LiveHumanData error")
+        logger.exception("sensor-data error")
         return []
 
-# ---------------------------------------------------------------------------
-# Face scan endpoint (now using HF Space)
-# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def run_face_inference(image: Image.Image):
+    logger.info(f"run_face_inference called image_size={image.size}")
+
+    x = eval_transform(image).unsqueeze(0).to(DEVICE)
+
+    logger.info("Running eye model")
+    eye_logits = eye_model(x)
+
+    logger.info("Running eyebrow model")
+    eyebrow_logits = eyebrow_model(x)
+
+    logger.info("Running mouth model")
+    mouth_logits = mouth_model(x)
+
+    eye_probs = torch.softmax(eye_logits, dim=1)[0].cpu().tolist()
+    eyebrow_probs = torch.softmax(eyebrow_logits, dim=1)[0].cpu().tolist()
+    mouth_probs = torch.softmax(mouth_logits, dim=1)[0].cpu().tolist()
+
+    eye_idx = int(torch.argmax(eye_logits, dim=1).item())
+    eyebrow_idx = int(torch.argmax(eyebrow_logits, dim=1).item())
+    mouth_idx = int(torch.argmax(mouth_logits, dim=1).item())
+
+    result = {
+        "eye": {
+            "predicted_class": EYE_CLASSES[eye_idx],
+            "class_probs": {cls: round(float(p), 4) for cls, p in zip(EYE_CLASSES, eye_probs)},
+        },
+        "eyebrow": {
+            "predicted_class": EYEBROW_CLASSES[eyebrow_idx],
+            "class_probs": {cls: round(float(p), 4) for cls, p in zip(EYEBROW_CLASSES, eyebrow_probs)},
+        },
+        "mouth": {
+            "predicted_class": MOUTH_CLASSES[mouth_idx],
+            "class_probs": {cls: round(float(p), 4) for cls, p in zip(MOUTH_CLASSES, mouth_probs)},
+        },
+    }
+
+    logger.info(
+        f"Face inference result eye={result['eye']['predicted_class']} "
+        f"eyebrow={result['eyebrow']['predicted_class']} "
+        f"mouth={result['mouth']['predicted_class']}"
+    )
+    return result
+
+
 @api_router.post("/scans/face")
 async def analyze_face(body: FaceScanIn, user: dict = Depends(get_current_user)):
-    if not body.image:
-        raise HTTPException(status_code=400, detail="No image provided")
+    started = time.time()
+    request_tag = str(uuid.uuid4())[:8]
 
-    logger.info(f"Received face scan request for user_id={user.get('id')}")
     try:
-        pil_image = decode_base64_image(body.image)
-        raw_result = run_face_models(pil_image)
-        summary = build_face_summary(raw_result)
-        logger.info(f"Face scan summary for user_id={user.get('id')}: {summary}")
-    except Exception as e:
-        logger.exception("Face model error")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.info(f"[face:{request_tag}] Face scan requested user_id={user['id']}")
 
-    face_doc = {
-        "id": str(uuid.uuid4()),
-        "user_id": user["id"],
-        "image_base64": body.image,
-        "raw_result": raw_result,
-        "summary": summary,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.face_scans.insert_one(face_doc)
-    return {"summary": summary}
+        await ensure_face_models_loaded()
 
-# ---------------------------------------------------------------------------
-# Root + startup
-# ---------------------------------------------------------------------------
+        async with face_inference_semaphore:
+            logger.info(f"[face:{request_tag}] Decoding image user_id={user['id']}")
+            image = await run_in_threadpool(decode_base64_image, body.image)
+
+            logger.info(f"[face:{request_tag}] Running face inference user_id={user['id']}")
+            result = await run_in_threadpool(run_face_inference, image)
+
+        scan_doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": user["id"],
+            "type": "face",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "result": result,
+        }
+
+        logger.info(f"[face:{request_tag}] Saving face scan to MongoDB")
+        insert_result = await db.scans.insert_one(scan_doc)
+
+        logger.info(
+            f"[face:{request_tag}] Face scan completed scan_id={scan_doc['id']} "
+            f"mongo_id={insert_result.inserted_id} "
+            f"user_id={user['id']} duration_ms={round((time.time()-started)*1000, 2)}"
+        )
+
+        scan_doc.pop("_id", None)
+        return scan_doc
+
+    except HTTPException:
+        logger.warning(f"[face:{request_tag}] Face scan aborted with HTTPException")
+        raise
+    except Exception:
+        logger.exception(f"[face:{request_tag}] Face inference failed")
+        raise HTTPException(status_code=500, detail="Face inference failed")
+
+
 @api_router.get("/")
+async def api_root():
+    return {"service": "NeuroScan AI", "status": "ok"}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting NeuroScan AI backend")
+
+    try:
+        await db.users.create_index("email", unique=True)
+        logger.info("Created users.email index")
+    except Exception:
+        logger.exception("users index creation failed")
+
+    try:
+        await db.scans.create_index([("user_id", 1), ("created_at", -1)])
+        logger.info("Created scans user_id/created_at index")
+    except Exception:
+        logger.exception("scans index creation failed")
+
+    try:
+        hardware_db = client["WearableProject"]
+        await hardware_db.LiveHumanData.create_index([("timestamp", -1)])
+        logger.info("Created newdata timestamp index")
+    except Exception:
+        logger.exception("newdata index creation failed")
+
+    try:
+        logger.info("Preloading QSVM models")
+        await run_in_threadpool(load_qsvm_models)
+    except Exception:
+        logger.exception("QSVM preload failed")
+
+    try:
+        logger.info("Preloading face models")
+        await ensure_face_models_loaded()
+    except Exception:
+        logger.exception("Face model preload failed")
+
+    logger.info("NeuroScan AI backend ready")
+    yield
+    logger.info("Shutting down NeuroScan AI backend")
+    client.close()
+    logger.info("MongoDB client closed")
+
+
+app = FastAPI(title="NeuroScan AI", lifespan=lifespan)
+
+
+@app.get("/")
 async def root():
     return {"service": "NeuroScan AI", "status": "ok"}
 
 
-@app.on_event("startup")
-async def on_startup():
-    logger.info("Starting NeuroScan AI backend")
-    await db.users.create_index("email", unique=True)
-    await db.scans.create_index([("user_id", 1), ("created_at", -1)])
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    request_id = str(uuid.uuid4())[:8]
+    client_host = request.client.host if request.client else "unknown"
 
-    global scaler, pca, qsvm_model
-    model_dir = ROOT_DIR / "models"
-    try:
-        scaler = joblib.load(model_dir / "live_qsvm_scaler.pkl")
-        pca = joblib.load(model_dir / "live_qsvm_pca.pkl")
-        qsvm_model = joblib.load(model_dir / "live_qsvm_model.pkl")
-        logger.info("Quantum SVM pipeline loaded successfully")
-    except Exception:
-        logger.exception(f"Failed to load Quantum models from {model_dir}")
+    logger.info(
+        f"[{request_id}] Request started method={request.method} "
+        f"path={request.url.path} client={client_host}"
+    )
 
     try:
-        ok = load_face_models()
-        if ok:
-            logger.info(
-                "Face ResNet models loaded successfully (Hugging Face Space)"
-            )
-        else:
-            logger.error("Face ResNet models NOT loaded")
+        response = await call_next(request)
+        duration_ms = round((time.time() - start_time) * 1000, 2)
+        logger.info(
+            f"[{request_id}] Request completed method={request.method} "
+            f"path={request.url.path} status={response.status_code} "
+            f"duration_ms={duration_ms}"
+        )
+        return response
     except Exception:
-        logger.exception("Failed to load face models from Hugging Face Space")
-
-    logger.info("NeuroScan AI backend ready")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    logger.info("Shutting down NeuroScan AI backend")
-    client.close()
+        duration_ms = round((time.time() - start_time) * 1000, 2)
+        logger.exception(
+            f"[{request_id}] Request failed method={request.method} "
+            f"path={request.url.path} duration_ms={duration_ms}"
+        )
+        raise
 
 
 app.include_router(api_router)
