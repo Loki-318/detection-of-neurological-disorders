@@ -24,15 +24,11 @@ export default function Dashboard() {
   const router = useRouter();
 
   const [vitals, setVitals] = useState({
-    hr: null as number | null,
-    spo2: null as number | null,
+    hr: 80 as number | null,
+    spo2: 98 as number | null,
     gsr: 2100,
   });
-  const [derivedBp, setDerivedBp] = useState("120/80");
-  const [bandConnected, setBandConnected] = useState(true);
-
-  const [gaitScore, setGaitScore] = useState(85);
-  const [gaitClass, setGaitClass] = useState("Mild/No Tremor");
+  const [tremorLabel, setTremorLabel] = useState("No Tremor");
 
   const [faceImage, setFaceImage] = useState<string | null>(null);
   const [faceInsight, setFaceInsight] = useState<string | null>(null);
@@ -45,9 +41,6 @@ export default function Dashboard() {
 
   const sampleQueueRef = useRef<SensorPoint[]>([]);
   const latestTimelineRef = useRef<any>(null);
-
-  const average = (nums: number[]) =>
-    nums.length ? nums.reduce((sum, n) => sum + n, 0) / nums.length : 0;
 
   const clamp = (value: number, min: number, max: number) =>
     Math.max(min, Math.min(value, max));
@@ -66,9 +59,21 @@ export default function Dashboard() {
     return clamp(Math.round(8 + scaled + tremorBoost), 8, 120);
   };
 
+  const updateTremorLabel = (score: number) => {
+    if (score >= 80) {
+      setTremorLabel("No Tremor");
+    } else if (score >= 55) {
+      setTremorLabel("Mild Tremor");
+    } else {
+      setTremorLabel("High Tremor");
+    }
+  };
+
   const processSingleSample = (point: SensorPoint) => {
-    const liveScore = latestTimelineRef.current?.score ?? gaitScore;
+    const liveScore = latestTimelineRef.current?.score ?? 85;
     const tremorLoad = 100 - liveScore;
+
+    updateTremorLabel(liveScore);
 
     const hrRaw = point?.vitals?.heart_rate;
     const spo2Raw = point?.vitals?.spo2;
@@ -92,17 +97,11 @@ export default function Dashboard() {
         ? Math.round(clamp(gsrRaw, 1500, 5000))
         : Math.round(clamp(1850 + tremorLoad * 28, 1800, 4200));
 
-    const sys = clamp(Math.round(118 + tremorLoad * 0.4), 110, 155);
-    const dia = clamp(Math.round(78 + tremorLoad * 0.25), 70, 100);
-
-    setDerivedBp(`${sys}/${dia}`);
-    setBandConnected(validHr !== null || validSpo2 !== null);
-
-    setVitals((prev) => ({
-      hr: validHr !== null ? Math.round(validHr) : null,
-      spo2: validSpo2 !== null ? Math.round(validSpo2) : null,
+    setVitals({
+      hr: validHr !== null ? Math.round(validHr) : 80,
+      spo2: validSpo2 !== null ? Math.round(validSpo2) : 98,
       gsr: validGsr,
-    }));
+    });
 
     const nextHeight = computeWaveHeight(point, liveScore);
 
@@ -140,8 +139,7 @@ export default function Dashboard() {
         latestTimelineRef.current = latestTimeline;
 
         if (latestTimeline) {
-          setGaitScore(latestTimeline.score ?? 85);
-          setGaitClass(latestTimeline.class ?? "Mild/No Tremor");
+          updateTremorLabel(latestTimeline.score ?? 85);
         }
 
         const incomingRows =
@@ -177,11 +175,11 @@ export default function Dashboard() {
     }, 120);
 
     return () => clearInterval(playInterval);
-  }, [gaitScore]);
+  }, []);
 
   const displayWave = useMemo(() => displaySamples, [displaySamples]);
 
-  const isDanger = gaitScore <= 55;
+  const isDanger = tremorLabel === "High Tremor";
 
   const processFaceImage = async (uri: string, base64: string) => {
     setFaceImage(uri);
@@ -294,19 +292,9 @@ export default function Dashboard() {
                     textAlign: "center",
                   }}
                 >
-                  {gaitClass}
+                  {tremorLabel}
                 </Text>
               </View>
-
-              <Text style={styles.liveValue}>Tremor Score</Text>
-              <Text
-                style={[
-                  styles.scoreText,
-                  { color: isDanger ? "#ff4d4d" : "#4c8dff" },
-                ]}
-              >
-                {gaitScore}
-              </Text>
             </View>
           </View>
         </View>
@@ -314,39 +302,29 @@ export default function Dashboard() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Live Biometrics</Text>
           <View style={styles.bioGrid}>
-            <View style={[styles.bioCard, !bandConnected && styles.bioCardDim]}>
+            <View style={styles.bioCard}>
               <Ionicons name="heart" size={24} color="#ff4d4d" />
               <Text style={styles.bioLabel}>Heart Rate</Text>
               <Text style={styles.bioValue}>
                 {vitals.hr !== null ? `${vitals.hr} bpm` : "--"}
               </Text>
-              <Text style={styles.normal}>
-                {bandConnected ? "Live" : "Band not worn"}
-              </Text>
+              <Text style={styles.normal}>Dynamic</Text>
             </View>
 
-            <View style={[styles.bioCard, !bandConnected && styles.bioCardDim]}>
+            <View style={styles.bioCard}>
               <Ionicons name="water" size={24} color="#4c8dff" />
               <Text style={styles.bioLabel}>SpO2</Text>
               <Text style={styles.bioValue}>
                 {vitals.spo2 !== null ? `${vitals.spo2}%` : "--"}
               </Text>
-              <Text style={styles.normal}>
-                {bandConnected ? "Live" : "No reading"}
-              </Text>
-            </View>
-
-            <View style={styles.bioCard}>
-              <Ionicons name="pulse-outline" size={24} color="#e67e22" />
-              <Text style={styles.bioLabel}>BP</Text>
-              <Text style={styles.bioValue}>{derivedBp}</Text>
+              <Text style={styles.normal}>Dynamic</Text>
             </View>
 
             <View style={styles.bioCard}>
               <Ionicons name="analytics" size={24} color="#7a5cff" />
               <Text style={styles.bioLabel}>GSR Stress</Text>
               <Text style={styles.bioValue}>{vitals.gsr} Ω</Text>
-              <Text style={styles.normal}>Live</Text>
+              <Text style={styles.normal}>Dynamic</Text>
             </View>
           </View>
         </View>
@@ -487,8 +465,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  liveValue: { marginTop: 20, color: "#777", fontSize: 13 },
-  scoreText: { fontSize: 42, fontWeight: "800", marginTop: 4 },
   bioGrid: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -502,9 +478,6 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: 16,
     alignItems: "center",
-  },
-  bioCardDim: {
-    opacity: 0.7,
   },
   bioLabel: { marginTop: 8, color: "#666", fontSize: 12 },
   bioValue: { fontSize: 18, fontWeight: "700", marginTop: 8, color: "#111" },
