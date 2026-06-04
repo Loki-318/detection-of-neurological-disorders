@@ -14,7 +14,6 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import { api } from "../../src/api";
 import { theme, shadow } from "../../src/theme";
-import { useRouter } from "expo-router";
 
 type FacePartResult = {
   predicted_class: string;
@@ -34,7 +33,6 @@ type FaceScanResponse = {
 };
 
 export default function ScanScreen() {
-  const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
 
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -51,60 +49,6 @@ export default function ScanScreen() {
       await ImagePicker.requestMediaLibraryPermissionsAsync();
     })();
   }, []);
-
-  const Sidebar = ({ active }: { active: "home" | "scan" | "history" }) => (
-    <View style={styles.sidebar}>
-      <Text style={styles.sidebarTitle}>NeuroSense</Text>
-
-      <TouchableOpacity
-        style={active === "home" ? styles.navItemActive : styles.navItem}
-        onPress={() => router.push("/")}
-      >
-        <Ionicons
-          name="home"
-          size={20}
-          color={active === "home" ? "#fff" : "#4c8dff"}
-        />
-        <Text
-          style={active === "home" ? styles.navTextActive : styles.navText}
-        >
-          Home
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={active === "scan" ? styles.navItemActive : styles.navItem}
-        onPress={() => router.push("/scan")}
-      >
-        <Ionicons
-          name="scan"
-          size={20}
-          color={active === "scan" ? "#fff" : "#4c8dff"}
-        />
-        <Text
-          style={active === "scan" ? styles.navTextActive : styles.navText}
-        >
-          Scan
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={active === "history" ? styles.navItemActive : styles.navItem}
-        onPress={() => router.push("/history")}
-      >
-        <Ionicons
-          name="time"
-          size={20}
-          color={active === "history" ? "#fff" : "#4c8dff"}
-        />
-        <Text
-          style={active === "history" ? styles.navTextActive : styles.navText}
-        >
-          History
-        </Text>
-      </TouchableOpacity>
-    </View>
-  );
 
   const getTopConfidence = (part?: FacePartResult) => {
     if (!part?.class_probs) return null;
@@ -250,7 +194,9 @@ export default function ScanScreen() {
   if (!permission) {
     return (
       <SafeAreaView style={styles.safe}>
-        <ActivityIndicator color={theme.primary} />
+        <View style={styles.loaderWrap}>
+          <ActivityIndicator color={theme.primary} />
+        </View>
       </SafeAreaView>
     );
   }
@@ -258,22 +204,19 @@ export default function ScanScreen() {
   if (!permission.granted) {
     return (
       <SafeAreaView style={styles.safe}>
-        <View style={styles.mainRow}>
-          <Sidebar active="scan" />
-          <View style={[styles.content, { justifyContent: "center" }]}>
-            <View style={styles.permWrap}>
-              <Ionicons name="camera" size={60} color={theme.primary} />
-              <Text style={styles.permTitle}>Camera Permission Required</Text>
-              <Text style={styles.permText}>
-                NeuroScan requires camera access for facial biomarker analysis.
-              </Text>
-              <TouchableOpacity
-                style={styles.startBtn}
-                onPress={requestPermission}
-              >
-                <Text style={styles.startText}>Allow Camera</Text>
-              </TouchableOpacity>
-            </View>
+        <View style={styles.content}>
+          <View style={styles.permWrap}>
+            <Ionicons name="camera" size={60} color={theme.primary} />
+            <Text style={styles.permTitle}>Camera Permission Required</Text>
+            <Text style={styles.permText}>
+              NeuroScan requires camera access for facial biomarker analysis.
+            </Text>
+            <TouchableOpacity
+              style={styles.startBtn}
+              onPress={requestPermission}
+            >
+              <Text style={styles.startText}>Allow Camera</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </SafeAreaView>
@@ -282,183 +225,171 @@ export default function ScanScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.mainRow}>
-        <Sidebar active="scan" />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.content}>
+          <View style={styles.header}>
+            <Text style={styles.title}>Facial Biomarker Scan</Text>
+            <Text style={styles.subtitle}>
+              Real-time facial analysis for neurological cues
+            </Text>
+          </View>
 
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View style={styles.content}>
-            <View style={styles.header}>
-              <Text style={styles.title}>Facial Biomarker Scan</Text>
-              <Text style={styles.subtitle}>
-                Real-time facial analysis for neurological cues
-              </Text>
-            </View>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Face Analysis</Text>
 
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Face Analysis</Text>
-
-              <View style={styles.faceRow}>
-                <View style={styles.faceLeft}>
-                  <View style={styles.facePreview}>
-                    {isCameraOpen ? (
-                      <CameraView
-                        ref={cameraRef}
-                        style={styles.faceImage}
-                        facing="front"
+            <View style={styles.faceRow}>
+              <View style={styles.faceLeft}>
+                <View style={styles.facePreview}>
+                  {isCameraOpen ? (
+                    <CameraView
+                      ref={cameraRef}
+                      style={styles.faceImage}
+                      facing="front"
+                    />
+                  ) : capturedImage ? (
+                    <Image
+                      source={{ uri: capturedImage }}
+                      style={styles.faceImage}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View style={styles.placeholder}>
+                      <Ionicons
+                        name="person-circle-outline"
+                        size={80}
+                        color="#999"
                       />
-                    ) : capturedImage ? (
-                      <Image
-                        source={{ uri: capturedImage }}
-                        style={styles.faceImage}
-                        resizeMode="contain"
-                      />
-                    ) : (
-                      <View style={styles.placeholder}>
-                        <Ionicons
-                          name="person-circle-outline"
-                          size={80}
-                          color="#999"
-                        />
-                        <Text style={styles.placeholderText}>
-                          Scan or upload a face
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-
-                  <View style={styles.buttonRowLeft}>
-                    <TouchableOpacity
-                      style={[
-                        styles.scanBtn,
-                        isProcessing && styles.disabledBtn,
-                      ]}
-                      onPress={handleScanPress}
-                      disabled={isProcessing}
-                    >
-                      <Ionicons name="camera" size={20} color="#fff" />
-                      <Text style={styles.btnText}>
-                        {isCameraOpen ? "Click Picture" : "Scan"}
+                      <Text style={styles.placeholderText}>
+                        Scan or upload a face
                       </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.uploadBtn,
-                        isProcessing && styles.disabledBtn,
-                      ]}
-                      onPress={uploadImage}
-                      disabled={isProcessing}
-                    >
-                      <Ionicons name="image" size={20} color="#000" />
-                      <Text style={styles.uploadText}>Upload Image</Text>
-                    </TouchableOpacity>
-                  </View>
+                    </View>
+                  )}
                 </View>
 
-                <View style={styles.faceInfo}>
-                  <Text style={styles.faceInfoTitle}>Face Analysis Results</Text>
+                <View style={styles.buttonRowLeft}>
+                  <TouchableOpacity
+                    style={[
+                      styles.scanBtn,
+                      isProcessing && styles.disabledBtn,
+                    ]}
+                    onPress={handleScanPress}
+                    disabled={isProcessing}
+                  >
+                    <Ionicons name="camera" size={20} color="#fff" />
+                    <Text style={styles.btnText}>
+                      {isCameraOpen ? "Click Picture" : "Scan"}
+                    </Text>
+                  </TouchableOpacity>
 
-                  <Text style={styles.faceStatus}>
-                    {isProcessing
-                      ? "Analyzing facial biomarkers, please wait a few seconds..."
-                      : scanResult
-                      ? "Analysis complete:"
-                      : "Tap Scan or Upload Image to start an analysis."}
-                  </Text>
-
-                  {insight && !isProcessing && (
-                    <View style={styles.faceInsightBox}>
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={16}
-                        color="#18a558"
-                      />
-                      <Text style={styles.faceInsightText}>{insight}</Text>
-                    </View>
-                  )}
-
-                  {scanResult && !isProcessing && (
-                    <View style={styles.resultsGrid}>
-                      {renderResultCard("Eye", "eye-outline", scanResult.result.eye)}
-                      {renderResultCard(
-                        "Eyebrow",
-                        "analytics-outline",
-                        scanResult.result.eyebrow
-                      )}
-                      {renderResultCard(
-                        "Mouth",
-                        "happy-outline",
-                        scanResult.result.mouth
-                      )}
-                    </View>
-                  )}
+                  <TouchableOpacity
+                    style={[
+                      styles.uploadBtn,
+                      isProcessing && styles.disabledBtn,
+                    ]}
+                    onPress={uploadImage}
+                    disabled={isProcessing}
+                  >
+                    <Ionicons name="image" size={20} color="#000" />
+                    <Text style={styles.uploadText}>Upload Image</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
-            </View>
 
-            <View style={styles.statusBar}>
-              <Text style={styles.statusText}>{status}</Text>
+              <View style={styles.faceInfo}>
+                <Text style={styles.faceInfoTitle}>Face Analysis Results</Text>
+
+                <Text style={styles.faceStatus}>
+                  {isProcessing
+                    ? "Analyzing facial biomarkers, please wait a few seconds..."
+                    : scanResult
+                    ? "Analysis complete:"
+                    : "Tap Scan or Upload Image to start an analysis."}
+                </Text>
+
+                {insight && !isProcessing && (
+                  <View style={styles.faceInsightBox}>
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={16}
+                      color="#18a558"
+                    />
+                    <Text style={styles.faceInsightText}>{insight}</Text>
+                  </View>
+                )}
+
+                {scanResult && !isProcessing && (
+                  <View style={styles.resultsGrid}>
+                    {renderResultCard("Eye", "eye-outline", scanResult.result.eye)}
+                    {renderResultCard(
+                      "Eyebrow",
+                      "analytics-outline",
+                      scanResult.result.eyebrow
+                    )}
+                    {renderResultCard(
+                      "Mouth",
+                      "happy-outline",
+                      scanResult.result.mouth
+                    )}
+                  </View>
+                )}
+              </View>
             </View>
           </View>
-        </ScrollView>
-      </View>
+
+          <View style={styles.statusBar}>
+            <Text style={styles.statusText}>{status}</Text>
+          </View>
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.bg },
-  mainRow: { flex: 1, flexDirection: "row" },
+  safe: {
+    flex: 1,
+    backgroundColor: theme.bg,
+  },
+
+  scroll: {
+    flex: 1,
+  },
 
   scrollContent: {
     flexGrow: 1,
+    paddingBottom: 24,
   },
 
-  sidebar: {
-    width: 96,
-    paddingVertical: 16,
-    paddingHorizontal: 8,
-    backgroundColor: "#111827",
+  content: {
+    flex: 1,
   },
-  sidebarTitle: {
-    color: "#e5e7eb",
-    fontSize: 14,
-    fontWeight: "700",
-    marginBottom: 16,
-    textAlign: "center",
-  },
-  navItem: {
-    flexDirection: "row",
+
+  loaderWrap: {
+    flex: 1,
     alignItems: "center",
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    marginBottom: 8,
+    justifyContent: "center",
   },
-  navItemActive: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    marginBottom: 8,
-    backgroundColor: "#4c8dff",
+
+  header: {
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 16,
   },
-  navText: { color: "#e5e7eb", fontSize: 12, fontWeight: "600" },
-  navTextActive: { color: "#ffffff", fontSize: 12, fontWeight: "700" },
-
-  content: { flex: 1 },
-
-  header: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 16 },
   title: {
     fontSize: 28,
     fontWeight: "800",
     color: theme.textMain,
     letterSpacing: -0.5,
   },
-  subtitle: { marginTop: 4, fontSize: 14, color: theme.textMuted },
+  subtitle: {
+    marginTop: 4,
+    fontSize: 14,
+    color: theme.textMuted,
+  },
 
   card: {
     backgroundColor: "#fff",
@@ -468,10 +399,20 @@ const styles = StyleSheet.create({
     padding: 18,
     ...shadow,
   },
-  cardTitle: { fontSize: 20, fontWeight: "700", color: "#111" },
+  cardTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#111",
+  },
 
-  faceRow: { flexDirection: "row", marginTop: 20, gap: 16 },
-  faceLeft: { flex: 0.9 },
+  faceRow: {
+    flexDirection: "row",
+    marginTop: 20,
+    gap: 16,
+  },
+  faceLeft: {
+    flex: 0.9,
+  },
   facePreview: {
     width: "100%",
     height: 260,
@@ -481,14 +422,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  faceImage: { width: "100%", height: "100%" },
+  faceImage: {
+    width: "100%",
+    height: "100%",
+  },
 
   placeholder: {
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 24,
   },
-  placeholderText: { marginTop: 8, color: "#777", fontSize: 13 },
+  placeholderText: {
+    marginTop: 8,
+    color: "#777",
+    fontSize: 13,
+  },
 
   buttonRowLeft: {
     flexDirection: "row",
@@ -517,18 +465,33 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
-  disabledBtn: { opacity: 0.6 },
-  btnText: { color: "#fff", fontWeight: "700" },
-  uploadText: { color: "#111", fontWeight: "700" },
+  disabledBtn: {
+    opacity: 0.6,
+  },
+  btnText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  uploadText: {
+    color: "#111",
+    fontWeight: "700",
+  },
 
-  faceInfo: { flex: 1.1, justifyContent: "flex-start" },
+  faceInfo: {
+    flex: 1.1,
+    justifyContent: "flex-start",
+  },
   faceInfoTitle: {
     fontSize: 16,
     fontWeight: "700",
     color: "#111",
     marginBottom: 8,
   },
-  faceStatus: { fontSize: 13, color: "#666", marginBottom: 12 },
+  faceStatus: {
+    fontSize: 13,
+    color: "#666",
+    marginBottom: 12,
+  },
   faceInsightBox: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -539,7 +502,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginBottom: 12,
   },
-  faceInsightText: { color: "#155c31", fontSize: 13, flexShrink: 1 },
+  faceInsightText: {
+    color: "#155c31",
+    fontSize: 13,
+    flexShrink: 1,
+  },
 
   resultsGrid: {
     gap: 10,
@@ -578,7 +545,10 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     paddingTop: 4,
   },
-  statusText: { color: theme.textMuted, fontSize: 13 },
+  statusText: {
+    color: theme.textMuted,
+    fontSize: 13,
+  },
 
   permWrap: {
     flex: 1,
@@ -609,5 +579,9 @@ const styles = StyleSheet.create({
     gap: 10,
     ...shadow,
   },
-  startText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+  startText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "800",
+  },
 });

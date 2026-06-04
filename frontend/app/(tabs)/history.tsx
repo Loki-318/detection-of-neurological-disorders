@@ -77,45 +77,54 @@ function average(nums: number[]) {
   return nums.reduce((sum, n) => sum + n, 0) / nums.length;
 }
 
-function buildPgSummary(scan: ScanItem) {
+function buildDetectionSummary(scan: ScanItem) {
   const eye = scan.result?.eye;
   const eyebrow = scan.result?.eyebrow;
   const mouth = scan.result?.mouth;
 
-  const severityAvg = average([
-    classToScore(eye?.predicted_class),
-    classToScore(eyebrow?.predicted_class),
-    classToScore(mouth?.predicted_class),
-  ]);
+  const eyeScore = classToScore(eye?.predicted_class);
+  const eyebrowScore = classToScore(eyebrow?.predicted_class);
+  const mouthScore = classToScore(mouth?.predicted_class);
 
+  const severityAvg = average([eyeScore, eyebrowScore, mouthScore]);
   const confidenceAvg = average([
     getTopConfidence(eye) ?? 0,
     getTopConfidence(eyebrow) ?? 0,
     getTopConfidence(mouth) ?? 0,
   ]);
 
-  let headline = "Mild facial indicator pattern";
-  let concern = "Low concern";
-  let gaitTag = "Stable gait-like profile";
+  let riskLevel = "Low";
+  let pattern = "No strong neurological facial pattern";
+  let statusColor = theme.low;
+  let action = "Continue monitoring with future scans.";
+  let badge = "Stable";
 
   if (severityAvg > 3.25) {
-    headline = "Severe facial indicator pattern";
-    concern = "High concern";
-    gaitTag = "Higher gait-risk style profile";
+    riskLevel = "High";
+    pattern = "Strong Parkinsonian-style facial masking pattern";
+    statusColor = theme.high;
+    action = "Recommend neurological review and gait correlation.";
+    badge = "High risk";
   } else if (severityAvg > 2.5) {
-    headline = "Moderate-severe facial indicator pattern";
-    concern = "High concern";
-    gaitTag = "Elevated gait-risk style profile";
+    riskLevel = "High";
+    pattern = "Moderate-severe facial motor reduction pattern";
+    statusColor = theme.high;
+    action = "Recommend repeat scan and clinical follow-up.";
+    badge = "High risk";
   } else if (severityAvg > 1.5) {
-    headline = "Moderate facial indicator pattern";
-    concern = "Medium concern";
-    gaitTag = "Watch gait trend closely";
+    riskLevel = "Medium";
+    pattern = "Moderate facial movement reduction pattern";
+    statusColor = theme.moderate;
+    action = "Watch trend over time and compare with gait findings.";
+    badge = "Watch";
   }
 
   return {
-    headline,
-    concern,
-    gaitTag,
+    riskLevel,
+    pattern,
+    statusColor,
+    action,
+    badge,
     severityAvg,
     confidenceAvg,
   };
@@ -148,204 +157,168 @@ export default function HistoryScreen() {
     setRefreshing(false);
   };
 
-  const Sidebar = ({ active }: { active: "home" | "scan" | "history" }) => (
-    <View style={styles.sidebar}>
-      <Text style={styles.sidebarTitle}>NeuroSense</Text>
-
-      <TouchableOpacity
-        style={active === "home" ? styles.navItemActive : styles.navItem}
-        onPress={() => router.push("/")}
-      >
-        <Ionicons
-          name="home"
-          size={20}
-          color={active === "home" ? "#fff" : "#4c8dff"}
-        />
-        <Text
-          style={active === "home" ? styles.navTextActive : styles.navText}
-        >
-          Home
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={active === "scan" ? styles.navItemActive : styles.navItem}
-        onPress={() => router.push("/scan")}
-      >
-        <Ionicons
-          name="scan"
-          size={20}
-          color={active === "scan" ? "#fff" : "#4c8dff"}
-        />
-        <Text
-          style={active === "scan" ? styles.navTextActive : styles.navText}
-        >
-          Scan
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={active === "history" ? styles.navItemActive : styles.navItem}
-        onPress={() => router.push("/history")}
-      >
-        <Ionicons
-          name="time"
-          size={20}
-          color={active === "history" ? "#fff" : "#4c8dff"}
-        />
-        <Text
-          style={active === "history" ? styles.navTextActive : styles.navText}
-        >
-          History
-        </Text>
-      </TouchableOpacity>
-    </View>
-  );
-
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.mainRow}>
-        <Sidebar active="history" />
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.scroll}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={theme.primary}
+          />
+        }
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.header}>
+          <Text style={styles.title}>Scan History</Text>
+          <Text style={styles.subtitle}>
+            Saved scan records with derived neurological risk screening.
+          </Text>
+        </View>
 
-        <ScrollView
-          style={styles.content}
-          contentContainerStyle={styles.scroll}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={theme.primary}
-            />
-          }
-        >
-          <View style={styles.header}>
-            <Text style={styles.title}>Scan History</Text>
-            <Text style={styles.subtitle}>
-              All saved scan records for the current user.
+        {scans.length === 0 ? (
+          <View style={[styles.emptyCard, shadow]} testID="history-empty">
+            <Ionicons name="time-outline" size={32} color={theme.primary} />
+            <Text style={styles.emptyTitle}>No scans yet</Text>
+            <Text style={styles.emptyText}>
+              Run your first scan to start building history.
             </Text>
+            <TouchableOpacity
+              style={styles.emptyCta}
+              onPress={() => router.push("/scan")}
+              testID="history-start-scan"
+            >
+              <Text style={styles.emptyCtaText}>Start Scan</Text>
+            </TouchableOpacity>
           </View>
-
-          {scans.length === 0 ? (
-            <View style={[styles.emptyCard, shadow]} testID="history-empty">
-              <Ionicons name="time-outline" size={32} color={theme.primary} />
-              <Text style={styles.emptyTitle}>No scans yet</Text>
-              <Text style={styles.emptyText}>
-                Run your first scan to start building history.
-              </Text>
-              <TouchableOpacity
-                style={styles.emptyCta}
-                onPress={() => router.push("/scan")}
-                testID="history-start-scan"
-              >
-                <Text style={styles.emptyCtaText}>Start Scan</Text>
-              </TouchableOpacity>
+        ) : (
+          <View style={[styles.historyCard, shadow]}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.cardTitle}>All Scans</Text>
+              <Text style={styles.sectionMeta}>{scans.length} records</Text>
             </View>
-          ) : (
-            <View style={[styles.historyCard, shadow]}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.cardTitle}>All Scans</Text>
-                <Text style={styles.sectionMeta}>{scans.length} records</Text>
-              </View>
 
-              {scans.map((scan, index) => {
-                const eye = scan.result?.eye;
-                const eyebrow = scan.result?.eyebrow;
-                const mouth = scan.result?.mouth;
-                const pg = buildPgSummary(scan);
+            {scans.map((scan, index) => {
+              const eye = scan.result?.eye;
+              const eyebrow = scan.result?.eyebrow;
+              const mouth = scan.result?.mouth;
+              const detection = buildDetectionSummary(scan);
 
-                return (
-                  <View
-                    key={scan.id || `${scan.created_at}-${index}`}
-                    style={styles.scanCard}
-                  >
-                    <View style={styles.scanTopRow}>
-                      <View style={styles.scanTitleWrap}>
-                        <View style={styles.scanIconWrap}>
-                          <Ionicons
-                            name="document-text-outline"
-                            size={18}
-                            color={theme.primary}
-                          />
-                        </View>
-
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.scanTitle}>
-                            {scan.type === "face" ? "Face Scan" : "Scan"}
-                          </Text>
-                          <Text style={styles.scanDate}>
-                            {formatDateTime(scan.created_at)}
-                          </Text>
-                          <Text style={styles.scanMeta}>
-                            Scan ID: {scan.id}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-
-                    <View style={styles.metricsGrid}>
-                      <ResultBox
-                        label="Eye"
-                        value={eye?.predicted_class || "N/A"}
-                        confidence={toPercent(getTopConfidence(eye))}
-                        color={severityColor(eye?.predicted_class)}
-                        icon="eye-outline"
-                      />
-                      <ResultBox
-                        label="Eyebrow"
-                        value={eyebrow?.predicted_class || "N/A"}
-                        confidence={toPercent(getTopConfidence(eyebrow))}
-                        color={severityColor(eyebrow?.predicted_class)}
-                        icon="analytics-outline"
-                      />
-                      <ResultBox
-                        label="Mouth"
-                        value={mouth?.predicted_class || "N/A"}
-                        confidence={toPercent(getTopConfidence(mouth))}
-                        color={severityColor(mouth?.predicted_class)}
-                        icon="happy-outline"
-                      />
-                    </View>
-
-                    <View style={styles.summaryBox}>
-                      <View style={styles.summaryHeader}>
+              return (
+                <View
+                  key={scan.id || `${scan.created_at}-${index}`}
+                  style={styles.scanCard}
+                >
+                  <View style={styles.scanTopRow}>
+                    <View style={styles.scanTitleWrap}>
+                      <View style={styles.scanIconWrap}>
                         <Ionicons
-                          name="pulse-outline"
-                          size={16}
-                          color={severityColor(pg.headline)}
+                          name="document-text-outline"
+                          size={18}
+                          color={theme.primary}
                         />
-                        <Text style={styles.summaryTitle}>Derived PG summary</Text>
                       </View>
 
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.scanTitle}>
+                          {scan.type === "face" ? "Face Scan" : "Scan"}
+                        </Text>
+                        <Text style={styles.scanDate}>
+                          {formatDateTime(scan.created_at)}
+                        </Text>
+                        <Text style={styles.scanMeta}>Scan ID: {scan.id}</Text>
+                      </View>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.riskBadge,
+                        { backgroundColor: `${detection.statusColor}18` },
+                      ]}
+                    >
                       <Text
                         style={[
-                          styles.summaryHeadline,
-                          { color: severityColor(pg.headline) },
+                          styles.riskBadgeText,
+                          { color: detection.statusColor },
                         ]}
                       >
-                        {pg.headline}
-                      </Text>
-
-                      <Text style={styles.summaryText}>
-                        Concern: {pg.concern} • Gait note: {pg.gaitTag}
-                      </Text>
-
-                      <Text style={styles.summaryText}>
-                        Severity index: {pg.severityAvg.toFixed(2)} • Mean
-                        confidence: {toPercent(pg.confidenceAvg)}
-                      </Text>
-
-                      <Text style={styles.summaryNote}>
-                        This is a client-side derived summary for quick review,
-                        not a clinical diagnosis.
+                        {detection.badge}
                       </Text>
                     </View>
                   </View>
-                );
-              })}
-            </View>
-          )}
-        </ScrollView>
-      </View>
+
+                  <View
+                    style={[
+                      styles.detectionBox,
+                      { borderColor: detection.statusColor },
+                    ]}
+                  >
+                    <View style={styles.detectionHeader}>
+                      <Ionicons
+                        name="pulse-outline"
+                        size={16}
+                        color={detection.statusColor}
+                      />
+                      <Text style={styles.detectionTitle}>
+                        Detection summary
+                      </Text>
+                    </View>
+
+                    <Text
+                      style={[
+                        styles.detectionPattern,
+                        { color: detection.statusColor },
+                      ]}
+                    >
+                      {detection.pattern}
+                    </Text>
+
+                    <Text style={styles.detectionText}>
+                      Risk level: {detection.riskLevel} • Severity index:{" "}
+                      {detection.severityAvg.toFixed(2)} • Mean confidence:{" "}
+                      {toPercent(detection.confidenceAvg)}
+                    </Text>
+
+                    <Text style={styles.detectionText}>
+                      Suggested action: {detection.action}
+                    </Text>
+
+                    <Text style={styles.detectionNote}>
+                      Screening support only — not a diagnosis.
+                    </Text>
+                  </View>
+
+                  <View style={styles.metricsGrid}>
+                    <ResultBox
+                      label="Eye"
+                      value={eye?.predicted_class || "N/A"}
+                      confidence={toPercent(getTopConfidence(eye))}
+                      color={severityColor(eye?.predicted_class)}
+                      icon="eye-outline"
+                    />
+                    <ResultBox
+                      label="Eyebrow"
+                      value={eyebrow?.predicted_class || "N/A"}
+                      confidence={toPercent(getTopConfidence(eyebrow))}
+                      color={severityColor(eyebrow?.predicted_class)}
+                      icon="analytics-outline"
+                    />
+                    <ResultBox
+                      label="Mouth"
+                      value={mouth?.predicted_class || "N/A"}
+                      confidence={toPercent(getTopConfidence(mouth))}
+                      color={severityColor(mouth?.predicted_class)}
+                      icon="happy-outline"
+                    />
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -377,42 +350,6 @@ function ResultBox({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.bg },
-  mainRow: { flex: 1, flexDirection: "row" },
-
-  sidebar: {
-    width: 96,
-    paddingVertical: 16,
-    paddingHorizontal: 8,
-    backgroundColor: "#111827",
-  },
-  sidebarTitle: {
-    color: "#e5e7eb",
-    fontSize: 14,
-    fontWeight: "700",
-    marginBottom: 16,
-    textAlign: "center",
-  },
-  navItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    marginBottom: 8,
-  },
-  navItemActive: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    marginBottom: 8,
-    backgroundColor: "#4c8dff",
-  },
-  navText: { color: "#e5e7eb", fontSize: 12, fontWeight: "600" },
-  navTextActive: { color: "#ffffff", fontSize: 12, fontWeight: "700" },
 
   content: { flex: 1 },
   scroll: { padding: 16, paddingBottom: 40, gap: 16 },
@@ -528,6 +465,50 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
 
+  riskBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    alignSelf: "flex-start",
+  },
+  riskBadgeText: {
+    fontSize: 12,
+    fontWeight: "800",
+  },
+
+  detectionBox: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1.5,
+  },
+  detectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 8,
+  },
+  detectionTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: theme.textMuted,
+  },
+  detectionPattern: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  detectionText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: theme.textMain,
+    lineHeight: 18,
+  },
+  detectionNote: {
+    marginTop: 6,
+    fontSize: 11,
+    color: theme.textMuted,
+  },
+
   metricsGrid: {
     flexDirection: "row",
     gap: 10,
@@ -558,40 +539,6 @@ const styles = StyleSheet.create({
   metricMeta: {
     marginTop: 6,
     fontSize: 12,
-    color: theme.textMuted,
-  },
-
-  summaryBox: {
-    backgroundColor: "#f8fafc",
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  summaryHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 8,
-  },
-  summaryTitle: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: theme.textMuted,
-  },
-  summaryHeadline: {
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  summaryText: {
-    marginTop: 6,
-    fontSize: 12,
-    color: theme.textMain,
-    lineHeight: 18,
-  },
-  summaryNote: {
-    marginTop: 6,
-    fontSize: 11,
     color: theme.textMuted,
   },
 });
