@@ -63,6 +63,64 @@ function severityColor(label?: string) {
   return theme.low;
 }
 
+function classToScore(label?: string) {
+  const text = (label || "").toLowerCase();
+
+  if (text.includes("moderate severe")) return 3;
+  if (text.includes("severe")) return 4;
+  if (text.includes("moderate")) return 2;
+  return 1;
+}
+
+function average(nums: number[]) {
+  if (!nums.length) return 0;
+  return nums.reduce((sum, n) => sum + n, 0) / nums.length;
+}
+
+function buildPgSummary(scan: ScanItem) {
+  const eye = scan.result?.eye;
+  const eyebrow = scan.result?.eyebrow;
+  const mouth = scan.result?.mouth;
+
+  const severityAvg = average([
+    classToScore(eye?.predicted_class),
+    classToScore(eyebrow?.predicted_class),
+    classToScore(mouth?.predicted_class),
+  ]);
+
+  const confidenceAvg = average([
+    getTopConfidence(eye) ?? 0,
+    getTopConfidence(eyebrow) ?? 0,
+    getTopConfidence(mouth) ?? 0,
+  ]);
+
+  let headline = "Mild facial indicator pattern";
+  let concern = "Low concern";
+  let gaitTag = "Stable gait-like profile";
+
+  if (severityAvg > 3.25) {
+    headline = "Severe facial indicator pattern";
+    concern = "High concern";
+    gaitTag = "Higher gait-risk style profile";
+  } else if (severityAvg > 2.5) {
+    headline = "Moderate-severe facial indicator pattern";
+    concern = "High concern";
+    gaitTag = "Elevated gait-risk style profile";
+  } else if (severityAvg > 1.5) {
+    headline = "Moderate facial indicator pattern";
+    concern = "Medium concern";
+    gaitTag = "Watch gait trend closely";
+  }
+
+  return {
+    headline,
+    concern,
+    gaitTag,
+    severityAvg,
+    confidenceAvg,
+  };
+}
+
 export default function HistoryScreen() {
   const router = useRouter();
   const [scans, setScans] = useState<ScanItem[]>([]);
@@ -193,6 +251,7 @@ export default function HistoryScreen() {
                 const eye = scan.result?.eye;
                 const eyebrow = scan.result?.eyebrow;
                 const mouth = scan.result?.mouth;
+                const pg = buildPgSummary(scan);
 
                 return (
                   <View
@@ -245,6 +304,40 @@ export default function HistoryScreen() {
                         color={severityColor(mouth?.predicted_class)}
                         icon="happy-outline"
                       />
+                    </View>
+
+                    <View style={styles.summaryBox}>
+                      <View style={styles.summaryHeader}>
+                        <Ionicons
+                          name="pulse-outline"
+                          size={16}
+                          color={severityColor(pg.headline)}
+                        />
+                        <Text style={styles.summaryTitle}>Derived PG summary</Text>
+                      </View>
+
+                      <Text
+                        style={[
+                          styles.summaryHeadline,
+                          { color: severityColor(pg.headline) },
+                        ]}
+                      >
+                        {pg.headline}
+                      </Text>
+
+                      <Text style={styles.summaryText}>
+                        Concern: {pg.concern} • Gait note: {pg.gaitTag}
+                      </Text>
+
+                      <Text style={styles.summaryText}>
+                        Severity index: {pg.severityAvg.toFixed(2)} • Mean
+                        confidence: {toPercent(pg.confidenceAvg)}
+                      </Text>
+
+                      <Text style={styles.summaryNote}>
+                        This is a client-side derived summary for quick review,
+                        not a clinical diagnosis.
+                      </Text>
                     </View>
                   </View>
                 );
@@ -465,6 +558,40 @@ const styles = StyleSheet.create({
   metricMeta: {
     marginTop: 6,
     fontSize: 12,
+    color: theme.textMuted,
+  },
+
+  summaryBox: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  summaryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 8,
+  },
+  summaryTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: theme.textMuted,
+  },
+  summaryHeadline: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  summaryText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: theme.textMain,
+    lineHeight: 18,
+  },
+  summaryNote: {
+    marginTop: 6,
+    fontSize: 11,
     color: theme.textMuted,
   },
 });
