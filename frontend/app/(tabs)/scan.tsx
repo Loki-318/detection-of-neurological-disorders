@@ -247,7 +247,7 @@ export default function ScanScreen() {
                   {isCameraOpen ? (
                     <CameraView
                       ref={cameraRef}
-                      style={styles.faceImage}
+                      style={styles.camera}
                       facing="front"
                     />
                   ) : capturedImage ? (
@@ -415,12 +415,16 @@ const styles = StyleSheet.create({
   },
   facePreview: {
     width: "100%",
-    height: 260,
+    aspectRatio: 4 / 3,
     borderRadius: 20,
     overflow: "hidden",
     backgroundColor: "#f2f2f2",
     alignItems: "center",
     justifyContent: "center",
+  },
+  camera: {
+    width: "100%",
+    height: "100%",
   },
   faceImage: {
     width: "100%",
