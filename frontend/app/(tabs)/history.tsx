@@ -77,7 +77,7 @@ function toPercent(value?: number | null) {
 
 function severityColor(label?: string) {
   const text = (label || "").toLowerCase();
-  if (text.includes("severe")) return theme.high;
+  if (text.includes("high")) return theme.high;
   if (text.includes("moderate")) return theme.moderate;
   return theme.low;
 }
@@ -112,29 +112,29 @@ function buildDetectionSummary(scan: ScanItem) {
   ]);
 
   let riskLevel = "Low";
-  let pattern = "No strong neurological facial pattern";
+  let pattern = "Low facial expression reduction";
   let statusColor = theme.low;
   let action = "Continue monitoring with future scans.";
-  let badge = "Stable";
+  let badge = "Low";
 
   if (severityAvg > 3.25) {
     riskLevel = "High";
-    pattern = "Strong Parkinsonian-style facial masking pattern";
+    pattern = "High facial expression reduction";
     statusColor = theme.high;
-    action = "Recommend neurological review and gait correlation.";
-    badge = "High risk";
+    action = "Follow up with repeat scan and clinical review.";
+    badge = "High";
   } else if (severityAvg > 2.5) {
     riskLevel = "High";
-    pattern = "Moderate-severe facial motor reduction pattern";
+    pattern = "Moderate-severe facial expression reduction";
     statusColor = theme.high;
-    action = "Recommend repeat scan and clinical follow-up.";
-    badge = "High risk";
+    action = "Follow up with repeat scan and clinical review.";
+    badge = "High";
   } else if (severityAvg > 1.5) {
     riskLevel = "Medium";
-    pattern = "Moderate facial movement reduction pattern";
+    pattern = "Moderate facial expression reduction";
     statusColor = theme.moderate;
-    action = "Watch trend over time and compare with gait findings.";
-    badge = "Watch";
+    action = "Watch the trend over time.";
+    badge = "Medium";
   }
 
   return {
@@ -373,7 +373,7 @@ export default function HistoryScreen() {
     setRefreshing(false);
   };
 
-  const sortedScans = useMemo(
+  const ascendingScans = useMemo(
     () =>
       scans
         .slice()
@@ -384,13 +384,18 @@ export default function HistoryScreen() {
     [scans]
   );
 
-  const trendPoints = useMemo(() => buildFaceTrend(sortedScans), [sortedScans]);
+  const sortedScans = useMemo(
+    () => ascendingScans.slice().reverse(),
+    [ascendingScans]
+  );
+
+  const trendPoints = useMemo(() => buildFaceTrend(ascendingScans), [ascendingScans]);
   const trendLabel = useMemo(() => getTrendLabel(trendPoints), [trendPoints]);
   const trendColor = getTrendColor(trendLabel);
 
   const latestDetection = useMemo(
-    () => getLatestScanSummary(sortedScans),
-    [sortedScans]
+    () => getLatestScanSummary(ascendingScans),
+    [ascendingScans]
   );
 
   return (
